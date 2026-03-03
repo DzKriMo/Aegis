@@ -17,6 +17,8 @@ Aegis is a policy-driven runtime guardrail layer for agentic systems. It enforce
 - Stateful trajectory-risk control plane with quarantine mode.
 - Action-centric tool risk fusion and OOD-driven dynamic thresholds.
 - Tamper-evident audit chain (`prev_event_hash` -> `event_hash`) for each event.
+- Replay endpoint for safety regression under new policy/model versions.
+- Cost-risk metrics endpoint with risk-weighted error.
 
 ## Core Features
 
@@ -69,6 +71,10 @@ AEGIS_QUARANTINE_THRESHOLD=0.95
 AEGIS_OOD_WARN_THRESHOLD=0.72
 AEGIS_ACTION_RISK_APPROVAL_THRESHOLD=0.75
 AEGIS_ACTION_RISK_BLOCK_THRESHOLD=1.1
+AEGIS_STAGE_DISAGREEMENT_THRESHOLD=2
+AEGIS_POLICY_VERSION=v1
+AEGIS_DETECTOR_VERSION=v1
+AEGIS_MODEL_HASH=unknown
 ```
 
 ## Dataset and Benchmark Scripts
@@ -83,6 +89,8 @@ AEGIS_ACTION_RISK_BLOCK_THRESHOLD=1.1
   `python scripts/benchmark_guardrail_api_e2e.py ...`
 - Benchmark trend/drift report:  
   `python scripts/benchmark_trend_report.py --glob "research/benchmark_*.json"`
+- Generate adversarial payloads (continuous red-team corpus):  
+  `python scripts/generate_adversarial_payloads.py --n 5000`
 
 ## Classifier Training
 
@@ -103,6 +111,12 @@ Validate policy file before running:
 ```powershell
 python scripts/validate_policies.py --path config/policies.example.yaml
 ```
+
+## Control Plane APIs
+
+- Session risk state: `GET /v1/sessions/{session_id}/risk`
+- Session replay: `POST /v1/replay/session/{session_id}`
+- Cost-risk metrics: `GET /v1/metrics/cost-risk`
 
 ## Tests
 

@@ -82,6 +82,10 @@ class Settings:
         self.aegis_ood_warn_threshold = _get_float("AEGIS_OOD_WARN_THRESHOLD", 0.72)
         self.aegis_action_risk_approval_threshold = _get_float("AEGIS_ACTION_RISK_APPROVAL_THRESHOLD", 0.75)
         self.aegis_action_risk_block_threshold = _get_float("AEGIS_ACTION_RISK_BLOCK_THRESHOLD", 1.1)
+        self.aegis_stage_disagreement_threshold = _get_int("AEGIS_STAGE_DISAGREEMENT_THRESHOLD", 2)
+        self.aegis_policy_version = _get("AEGIS_POLICY_VERSION", "v1")
+        self.aegis_detector_version = _get("AEGIS_DETECTOR_VERSION", "v1")
+        self.aegis_model_hash = _get("AEGIS_MODEL_HASH", "unknown")
         self._apply_guardrail_profile()
 
     def _apply_guardrail_profile(self) -> None:

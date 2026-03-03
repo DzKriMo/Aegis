@@ -191,9 +191,15 @@ See `.env` for:
 - **Tool output sanitizer**:
   - scans tool outputs for prompt-injection patterns
   - wraps post-tool policy evaluation with `<UNTRUSTED_TOOL_DATA>`
+- **Cross-stage consistency validator**:
+  - compares pre/post decision severity
+  - on large disagreement, logs anomaly and escalates to approval
 - **Tamper-evident audit chain**:
   - each event includes `prev_event_hash` and `event_hash`
   - hash chain makes session event logs tamper-evident
+- **Replay + cost-risk APIs**:
+  - `POST /v1/replay/session/{id}` to replay historical trajectories
+  - `GET /v1/metrics/cost-risk` for asymmetric security error accounting
 
 ---
 

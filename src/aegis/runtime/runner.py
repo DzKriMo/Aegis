@@ -68,6 +68,15 @@ class GuardedRuntime:
     def _scan_tool_output_for_injection(self, result: Dict[str, Any]) -> bool:
         return bool(self._tool_injection_re.search(json.dumps(result or {}, ensure_ascii=True)))
 
+    def _decision_severity(self, decision) -> int:
+        if getattr(decision, "blocked", False):
+            return 3
+        if getattr(decision, "require_approval", False):
+            return 2
+        if getattr(decision, "warn", False):
+            return 1
+        return 0
+
     def _update_and_persist_risk_state(
         self,
         session_id: str,
@@ -289,6 +298,35 @@ class GuardedRuntime:
 
         combined_risk = pre_risk + out_decision.risk_score
         combined_message = out_decision.message or pre_message
+        pre_sev = self._decision_severity(decision)
+        post_sev = self._decision_severity(out_decision)
+        if abs(pre_sev - post_sev) >= int(settings.aegis_stage_disagreement_threshold):
+            combined_risk += 0.2
+            self.store.log_event(
+                session_id,
+                {
+                    "stage": "consistency.anomaly",
+                    "message": "Cross-stage decision disagreement detected",
+                    "prellm_severity": pre_sev,
+                    "postllm_severity": post_sev,
+                    "policy_version": settings.aegis_policy_version,
+                    "detector_version": settings.aegis_detector_version,
+                    "model_hash": settings.aegis_model_hash,
+                },
+            )
+            risk_state = self._update_and_persist_risk_state(
+                session_id,
+                risk_state,
+                combined_risk,
+                injection_signal=False,
+                tool_misuse_signal=False,
+                goal_drift_signal=True,
+            )
+            if not out_decision.blocked:
+                out_decision.require_approval = True
+                if not out_decision.message:
+                    out_decision.message = "Consistency anomaly: approval required"
+            combined_message = out_decision.message or pre_message
 
         if out_decision.require_approval:
             h = approval_hash(stage="postllm", content=model_output, context=context)
@@ -520,6 +558,25 @@ class GuardedRuntime:
             detectors=self.detectors,
             context=context,
         )
+        pre_sev = self._decision_severity(pre_decision)
+        post_sev = self._decision_severity(post_decision)
+        if abs(pre_sev - post_sev) >= int(settings.aegis_stage_disagreement_threshold):
+            self.store.log_event(
+                session_id,
+                {
+                    "stage": "consistency.anomaly.tool",
+                    "tool": tool_name,
+                    "message": "Tool stage decision disagreement detected",
+                    "tool_pre_severity": pre_sev,
+                    "tool_post_severity": post_sev,
+                    "policy_version": settings.aegis_policy_version,
+                    "detector_version": settings.aegis_detector_version,
+                    "model_hash": settings.aegis_model_hash,
+                },
+            )
+            if not post_decision.blocked:
+                post_decision.require_approval = True
+                post_decision.message = post_decision.message or "Consistency anomaly: approval required"
         self.store.log_event(
             session_id,
             {

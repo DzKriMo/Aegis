@@ -7,8 +7,9 @@
 3. Aegis architecture: pre-LLM, tool-pre, tool-post, post-LLM guardrails.
 4. Runtime controls: policies + detectors + audit log + fail-hard startup validation.
 5. Reliability: retries, rate-limit backend options, drift report.
-6. Results: internal and external confusion matrices.
-7. Roadmap: calibration, additional public corpora, policy profiles by tenant.
+6. Control plane: trajectory risk, quarantine, action-risk fusion, OOD thresholds.
+7. Results: internal and external confusion matrices + cost-risk view.
+8. Roadmap: replay CI gate, larger adversarial corpus, tenant policy profiles.
 
 ## 2) Presentation Commands
 
@@ -24,6 +25,18 @@ Health check:
 
 ```powershell
 Invoke-RestMethod -Uri "http://127.0.0.1:8000/v1/health" -Headers @{ "x-api-key"="changeme" }
+```
+
+Risk state check:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/v1/sessions/<SESSION_ID>/risk" -Headers @{ "x-api-key"="changeme" }
+```
+
+Cost-risk metrics:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/v1/metrics/cost-risk" -Headers @{ "x-api-key"="changeme" }
 ```
 
 ## 3) Demo Payloads (Allow / Warn / Block)
@@ -85,3 +98,11 @@ Interpretation:
 - TF-IDF + Logistic Regression improves lexical representation but still suffers external shift.
 - Best current practical path: hybrid policy engine + classifier + targeted LLM escalation on uncertain/high-risk cases.
 - Next step: calibrated fusion (`regex + semantic + classifier + LLM`) with explicit cost/risk targets.
+
+## 7) New Control-Plane Talking Points
+
+- We do not treat safety as single-turn classification anymore.
+- Session trajectory risk accumulates across turns and can trigger quarantine.
+- Tool decisions use text risk + action risk; high-risk tools do not run on low-text confidence alone.
+- OOD uncertainty lowers thresholds and increases caution to reduce catastrophic false-allow.
+- Replay endpoint enables regression testing of historical sessions before policy/model rollout.

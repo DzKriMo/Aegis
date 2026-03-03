@@ -28,6 +28,10 @@ jobs:
         env:
           AEGIS_LLM_ENABLED: "false"
           AEGIS_DB_ENABLED: "false"
+          AEGIS_SEMANTIC_ENABLED: "false"
           POLICY_PATH: "config/policies.example.yaml"
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          PYTHONIOENCODING: "utf-8"
         run: |
           python -m unittest discover -s tests -p "test_*.py" -v

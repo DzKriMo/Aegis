@@ -35,6 +35,11 @@ curl -X POST http://127.0.0.1:8000/v1/sessions/<SESSION_ID>/messages `
   -d "{\"content\":\"User prompt here\",\"metadata\":{}}"
 ```
 
+4. Inspect trajectory risk state:
+```powershell
+curl http://127.0.0.1:8000/v1/sessions/<SESSION_ID>/risk -H "x-api-key: changeme"
+```
+
 ## 3. Reference Adapter (Python)
 
 Use a thin client in your app that wraps all agent I/O.
@@ -107,6 +112,15 @@ curl -X POST http://127.0.0.1:8000/v1/sessions/<SESSION_ID>/approvals `
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 8. Alert on high-risk events (`blocked`, `require_approval`, `llm_classification.__error__`).
+9. Stamp versions for replay/audit:
+   - `AEGIS_POLICY_VERSION`
+   - `AEGIS_DETECTOR_VERSION`
+   - `AEGIS_MODEL_HASH`
+10. Enable deterministic CI env flags:
+   - `AEGIS_LLM_ENABLED=false`
+   - `AEGIS_DB_ENABLED=false`
+   - `AEGIS_SEMANTIC_ENABLED=false`
+   - `HF_HUB_OFFLINE=1`
 
 ## 7. Multi-Tenant Usage
 
@@ -124,6 +138,14 @@ Use these fields in policy rules for tenant-specific controls.
 2. Soft enforce: enable warnings and approvals.
 3. Hard enforce: block high-confidence attack classes.
 4. Iterate from incident data and false positive review.
+
+Use replay to validate changes before rollout:
+```powershell
+curl -X POST http://127.0.0.1:8000/v1/replay/session/<SESSION_ID> `
+  -H "Content-Type: application/json" `
+  -H "x-api-key: changeme" `
+  -d "{\"policy_version\":\"candidate-v2\",\"detector_version\":\"candidate-det-v2\",\"model_hash\":\"qwen-3b-q4km\"}"
+```
 
 ## 9. Common Pitfalls
 
