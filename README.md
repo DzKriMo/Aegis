@@ -1,6 +1,6 @@
 # Aegis - Agent Guardrail Runtime
 
-<p align="center">
+<p align="center" style="Background-Color = #ffffff">
   <img src="logo.png" alt="Aegis Logo" width="220"/>
 </p>
 
