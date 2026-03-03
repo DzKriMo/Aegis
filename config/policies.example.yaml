@@ -1,4 +1,21 @@
-﻿policies:
+policies:
+- id: block_ml_block_intent
+  stage: prellm
+  match:
+    any:
+    - detector: ml_block_intent
+  action: block
+  message: Local classifier flagged high-confidence block intent
+  risk: 0.9
+
+- id: warn_ml_warn_intent
+  stage: prellm
+  match:
+    any:
+    - detector: ml_warn_intent
+  action: warn
+  message: Local classifier flagged caution intent
+  risk: 0.45
 - id: block_goal_hijack
   stage: prellm
   match:
@@ -11,6 +28,19 @@
   action: block
   message: Prompt injection / goal hijack detected
   risk: 0.9
+
+- id: block_high_risk_abuse
+  stage: prellm
+  match:
+    any:
+    - detector: high_risk_abuse
+    - semantic:
+        category: high_risk_abuse
+        threshold: 0.58
+  action: block
+  message: High-risk abuse request detected
+  risk: 0.95
+
 - id: warn_prompt_injection_context
   stage: prellm
   match:
@@ -19,6 +49,37 @@
   action: warn
   message: Prompt-injection related content detected (flagged)
   risk: 0.4
+
+- id: warn_suspicious_disclosure
+  stage: prellm
+  match:
+    any:
+    - detector: suspicious_disclosure
+    - semantic:
+        category: suspicious_disclosure
+        threshold: 0.60
+  action: warn
+  message: Potential disclosure-oriented request detected
+  risk: 0.45
+
+- id: warn_caution_disclosure
+  stage: prellm
+  match:
+    any:
+    - detector: caution_disclosure
+  action: warn
+  message: "Caution: request asks for policy/restriction disclosure context"
+  risk: 0.4
+
+- id: warn_exfiltration_prellm
+  stage: prellm
+  match:
+    any:
+    - detector: exfiltration
+  action: warn
+  message: Potential exfiltration intent detected
+  risk: 0.5
+
 - id: redact_pii
   stage: postllm
   match:
@@ -27,6 +88,7 @@
   action: redact
   redaction: '[REDACTED]'
   risk: 0.4
+
 - id: block_secrets
   stage: postllm
   match:
@@ -36,6 +98,7 @@
   action: block
   message: Secrets or exfiltration detected
   risk: 0.9
+
 - id: warn_policy_violation
   stage: prellm
   match:
@@ -44,6 +107,7 @@
   action: warn
   message: Possible policy violation
   risk: 0.5
+
 - id: approval_for_confidential
   stage: postllm
   match:
@@ -52,6 +116,7 @@
   action: approve
   message: CONFIDENTIAL output requires approval
   risk: 0.8
+
 - id: block_tool_shell_prod
   stage: tool_pre
   match:
@@ -61,6 +126,7 @@
   action: block
   message: Shell tool blocked by policy
   risk: 0.9
+
 - id: block_tool_secret_result
   stage: tool_post
   match:
@@ -69,6 +135,7 @@
   action: block
   message: Tool result contains secrets
   risk: 0.9
+
 - id: approve_shell_tool
   stage: tool_pre
   match:
@@ -77,3 +144,4 @@
   action: approve
   message: Shell tool requires approval
   risk: 0.6
+

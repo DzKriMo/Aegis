@@ -4,6 +4,7 @@ from sqlalchemy import select, delete
 
 from .db import get_session
 from .models import PolicyRecord, ToolPolicyRecord
+from ..policies.validate import validate_policies_schema
 
 
 def load_policies_from_db() -> List[Dict[str, Any]]:
@@ -42,6 +43,7 @@ def load_tool_policies_from_db() -> Dict[str, Dict[str, Any]]:
 
 
 def save_policies_to_db(policies: List[Dict[str, Any]]):
+    validate_policies_schema(policies)
     s = get_session()
     if s is None:
         return

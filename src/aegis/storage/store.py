@@ -1,5 +1,7 @@
-﻿from typing import Dict, Any
+from typing import Dict, Any
 import time
+import json
+import hashlib
 from datetime import datetime, timezone
 
 from ..telemetry.collector import emit
@@ -14,6 +16,14 @@ class InMemoryStore:
             "events": [],
             "pending_approvals": set(),
             "approved": set(),
+            "risk_state": {
+                "cumulative_risk_score": 0.0,
+                "goal_drift_score": 0.0,
+                "injection_attempt_count": 0,
+                "sensitive_tool_attempts": 0,
+                "quarantined": False,
+                "last_event_hash": "GENESIS",
+            },
         }
 
     def session_exists(self, session_id: str) -> bool:
@@ -25,6 +35,13 @@ class InMemoryStore:
 
         # Human-friendly timestamp for logs and API consumers.
         event["ts_readable"] = datetime.fromtimestamp(float(event["ts"]), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        state = self.sessions[session_id]["risk_state"]
+        prev_hash = str(state.get("last_event_hash", "GENESIS"))
+        event["prev_event_hash"] = prev_hash
+        canonical = json.dumps(event, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        event_hash = hashlib.sha256((prev_hash + canonical).encode("utf-8")).hexdigest()
+        event["event_hash"] = event_hash
+        state["last_event_hash"] = event_hash
 
         self.sessions[session_id]["events"].append(event)
         emit({"session_id": session_id, **event})
@@ -48,3 +65,14 @@ class InMemoryStore:
 
     def list_sessions(self) -> Dict[str, Dict[str, Any]]:
         return self.sessions
+
+    def get_risk_state(self, session_id: str) -> Dict[str, Any]:
+        sess = self.sessions.get(session_id) or {}
+        return dict(sess.get("risk_state") or {})
+
+    def set_risk_state(self, session_id: str, state: Dict[str, Any]) -> None:
+        if session_id not in self.sessions:
+            self.create_session(session_id)
+        merged = dict(self.sessions[session_id].get("risk_state") or {})
+        merged.update(state or {})
+        self.sessions[session_id]["risk_state"] = merged

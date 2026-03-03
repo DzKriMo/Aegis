@@ -2,6 +2,7 @@ import os
 import yaml
 from ..config import settings
 from ..storage.registry import load_policies_from_db
+from .validate import validate_policies_schema
 
 
 def _resolve_path(path: str) -> str:
@@ -13,11 +14,11 @@ def _resolve_path(path: str) -> str:
 
 
 def _validate_loaded_policies(policies):
-    if not isinstance(policies, list):
-        raise ValueError("Policies payload must be a list")
+    validate_policies_schema(policies)
 
 
 def load_policies():
+    strict = bool(settings.aegis_strict_policy_load)
     if settings.aegis_db_enabled:
         try:
             policies = load_policies_from_db()
@@ -25,7 +26,7 @@ def load_policies():
                 _validate_loaded_policies(policies)
                 return policies
         except Exception:
-            if settings.aegis_fail_closed:
+            if settings.aegis_fail_closed or strict:
                 raise RuntimeError("Policy load failed from DB while fail-closed is enabled")
 
     path = _resolve_path(settings.policy_path)
@@ -35,13 +36,14 @@ def load_policies():
         policies = data.get("policies", [])
         _validate_loaded_policies(policies)
         return policies
-    except Exception:
-        if settings.aegis_fail_closed:
-            raise RuntimeError("Policy load failed from file while fail-closed is enabled")
+    except Exception as exc:
+        if settings.aegis_fail_closed or strict:
+            raise RuntimeError(f"Policy load failed from file: {exc}")
         return []
 
 
 def save_policies(policies):
+    _validate_loaded_policies(policies)
     path = _resolve_path(settings.policy_path)
     payload = {"policies": policies}
     with open(path, "w", encoding="utf-8") as f:

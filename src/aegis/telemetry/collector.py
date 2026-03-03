@@ -14,9 +14,12 @@ def emit(event: Dict[str, Any]):
         "ts": time.time(),
         "event": event,
     }
-    line = json.dumps(payload, ensure_ascii=False)
+    line = json.dumps(payload, ensure_ascii=True)
     if settings.aegis_telemetry_path:
         with open(settings.aegis_telemetry_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     else:
-        print(line)
+        try:
+            print(line)
+        except UnicodeEncodeError:
+            print(line.encode("ascii", errors="backslashreplace").decode("ascii"))

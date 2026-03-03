@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .env
 llama.cpp/
+
+aegis_guardrail_test_payloads.txt
+research/*
+
+models/qwen2.5-3b-instruct-q4_k_m.gguf

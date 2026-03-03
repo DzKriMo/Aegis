@@ -1,3 +1,8 @@
-﻿# Optional ML dependencies for semantic detectors
+# Optional ML dependencies for semantic detectors and local classifiers
 sentence-transformers>=2.6
 huggingface-hub>=0.23
+scikit-learn>=1.5
+joblib>=1.4
+lightgbm>=4.5
+datasets>=4.6
+redis>=5.0

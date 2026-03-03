@@ -155,4 +155,20 @@ See `.env` for:
 
 ---
 
+## 9. Deployability Hardening (New)
+
+- **Strict policy load**: startup now validates policy schema and fails fast if policies are invalid or empty.
+- **Guardrail profiles**:
+  - `strict`: lower thresholds, fail-closed, semantic enabled
+  - `balanced`: default
+  - `assist`: higher thresholds to reduce user friction
+- **Rate-limit backends**:
+  - `memory` (dev)
+  - `sqlite` (single-node deploy)
+  - `redis` (distributed production)
+- **Benchmark drift tooling**: generate trend reports from benchmark JSON files and surface regression alerts.
+- **External corpus tooling**: builders for balanced external holdouts and larger public-source corpora.
+
+---
+
 End of document.

@@ -1,4 +1,5 @@
 from ..config import settings
+from ..policies.loader import load_policies
 
 
 def _is_prod_env() -> bool:
@@ -6,6 +7,11 @@ def _is_prod_env() -> bool:
 
 
 def validate_startup_settings() -> None:
+    # Always validate policy configuration at startup to avoid silent fail-open.
+    policies = load_policies()
+    if not policies:
+        raise RuntimeError("Startup policy validation failed: no policies loaded.")
+
     if not _is_prod_env():
         return
 

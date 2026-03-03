@@ -1,164 +1,117 @@
-﻿# Aegis — Agent Guardrail Runtime (Demo-Ready)
+# Aegis - Agent Guardrail Runtime
 
 <p align="center">
   <img src="logo.png" alt="Aegis Logo" width="220"/>
 </p>
 
-![Status](https://img.shields.io/badge/status-demo--ready-brightgreen)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+Aegis is a policy-driven runtime guardrail layer for agentic systems. It enforces controls across user input, tool execution, tool output, and final model response.
 
-Aegis is a Python-based agent guardrail runtime that enforces policies across **user input**, **tool calls**, **tool results**, and **model output**. It includes a web dashboard, JWT auth, database-backed event storage, and optional local LLM classification via llama.cpp.
+## What Is New
 
-> This repository is a **demo-ready** implementation for coursework and presentations.
+- Strict policy schema validation and startup fail-hard if policies are invalid/empty.
+- Guardrail profiles: `strict`, `balanced`, `assist`.
+- Rate-limit backends: `memory`, `sqlite`, and `redis`.
+- External evaluation suite expanded (public datasets + large-corpus builder).
+- Local classifier path supports both NB JSON and TF-IDF + Logistic Regression (`.joblib`).
+- Benchmark drift/trend reporting script and CI quality workflow.
 
----
+## Core Features
 
-## Features
+- Pre-LLM firewall: injection/jailbreak/exfiltration/network checks.
+- Tool guardrails: allow/deny + environment and path controls.
+- Post-LLM checks: secrets/PII/policy outputs.
+- API key + JWT auth.
+- Event/audit timeline via DB-backed sessions.
+- Optional local llama.cpp classification (Qwen GGUF).
 
-- **Pre-LLM firewall**: prompt injection, jailbreak, goal hijack, normalization, network URL firewall
-- **Post-LLM firewall**: secrets/PII redaction, exfiltration blocking, approvals
-- **Tool guardrails**: allow/deny, environment restrictions, sandboxed execution
-- **Fail-closed mode**: blocks on policy/classification errors when enabled
-- **LLM-based classification** (local): llama.cpp sidecar + Qwen2.5-3B GGUF
-- **JWT + API key auth**
-- **Database persistence** (SQLite default)
-- **Web dashboard** with event timeline and LLM classifications
-- **Telemetry hooks** + optional OpenTelemetry
-
----
-
-## Project Structure
-
-```
-Aegis/
-  src/aegis/
-    api/            # FastAPI endpoints (sessions, auth, dashboard)
-    auth/           # API key + JWT, rate limiting
-    detectors/      # regex/semantic + LLM classifiers
-    runtime/        # policy engine + guarded runtime
-    storage/        # DB + in-memory stores
-    tools/          # client/wrappers
-    telemetry/      # logging + OpenTelemetry
-  config/
-  scripts/
-```
-
----
-
-## Quickstart (Local, CPU)
+## Quick Start
 
 ```powershell
-python.exe -m uvicorn aegis.api.main:app --port 8000
+python -m uvicorn aegis.api.main:app --port 8000
 ```
 
 Dashboard:
-```
+
+```text
 http://127.0.0.1:8000/v1/dashboard
 ```
 
----
+## LLM Startup (GPU)
 
-## Enable Local LLM Classification (llama.cpp)
-
-1) Put llama.cpp binaries in `Aegis\llama.cpp` (already set up in this workspace).
-
-2) Start both llama.cpp + Aegis API (dashboard included):
 ```powershell
-.\scripts\start_demo.ps1
-```
-
-3) Manual launch option:
-```powershell
-.\llama.cpp\llama-server.exe \
-  -m models\qwen2.5-3b-instruct-q4_k_m.gguf \
-  --port 8080 --n-gpu-layers 35 --ctx-size 2048
+.\llama.cpp\llama-server.exe -m models\qwen2.5-3b-instruct-q4_k_m.gguf --port 8080 --n-gpu-layers 35 --ctx-size 2048
 $env:AEGIS_LLM_ENABLED="true"
 $env:AEGIS_LLM_ENDPOINT="http://127.0.0.1:8080/v1/chat/completions"
-$env:AEGIS_LLM_MODEL="qwen2.5-3b-instruct"
-python.exe -m uvicorn aegis.api.main:app --port 8000
+python -m uvicorn aegis.api.main:app --port 8000
 ```
 
-Check LLM health:
+## Important Config
+
+```env
+AEGIS_GUARDRAIL_PROFILE=balanced
+AEGIS_STRICT_POLICY_LOAD=true
+AEGIS_RATE_LIMIT_BACKEND=sqlite
+AEGIS_RATE_LIMIT_SQLITE_PATH=aegis_rate_limit.db
+# or:
+# AEGIS_RATE_LIMIT_BACKEND=redis
+# AEGIS_RATE_LIMIT_REDIS_URL=redis://127.0.0.1:6379/0
+
+AEGIS_LOCAL_CLASSIFIER_ENABLED=true
+AEGIS_LOCAL_CLASSIFIER_PATH=models/guardrail_lr.joblib
+AEGIS_LOCAL_BLOCK_THRESHOLD=0.78
+AEGIS_LOCAL_WARN_THRESHOLD=0.64
+AEGIS_LOCAL_APPEAL_LLM_ENABLED=false
+AEGIS_LOCAL_APPEAL_CONF_THRESHOLD=0.62
+```
+
+## Dataset and Benchmark Scripts
+
+- Generate large local clean set (default 9000):  
+  `python scripts/generate_clean_payloads.py`
+- Build external holdout (default 1000 balanced):  
+  `python scripts/build_external_eval_set.py`
+- Build large external corpus (target 25k, public-source mix):  
+  `python scripts/build_external_large_corpus.py`
+- API end-to-end benchmark:  
+  `python scripts/benchmark_guardrail_api_e2e.py ...`
+- Benchmark trend/drift report:  
+  `python scripts/benchmark_trend_report.py --glob "research/benchmark_*.json"`
+
+## Classifier Training
+
+- Train NB: `python scripts/train_local_guardrail_nb.py ...`
+- Train TF-IDF + Logistic Regression:  
+  `python scripts/train_local_guardrail_lr.py --dataset research/aegis_payloads_clean_9000.txt --model-out models/guardrail_lr.joblib`
+- Optional stack (LR scores + heuristics -> LightGBM):  
+  `python scripts/train_local_guardrail_stack.py --dataset research/aegis_payloads_clean_9000.txt --lr-model models/guardrail_lr.joblib --model-out models/guardrail_stack_lgbm.joblib`
+- Evaluate LR:  
+  `python scripts/eval_local_guardrail_lr.py --model models/guardrail_lr.joblib --dataset research/external_eval_holdout_1000.jsonl`
+- Threshold calibration:  
+  `python scripts/calibrate_local_thresholds.py --model models/guardrail_lr.joblib --dataset research/external_eval_holdout_1000.jsonl`
+
+## Policy Validation
+
+Validate policy file before running:
+
 ```powershell
-Invoke-WebRequest -Uri "http://127.0.0.1:8000/v1/llm/ping" -Headers @{ "x-api-key"="changeme" } -UseBasicParsing
+python scripts/validate_policies.py --path config/policies.example.yaml
 ```
 
----
-
-## Demo Script
-
-```powershell
-python.exe scripts\demo_cli.py
-```
-
----
-
-## Auth
-
-- **API Key**: pass `x-api-key: changeme`
-- **JWT**: request token and use `Authorization: Bearer <token>`
-
-Token:
-```powershell
-Invoke-WebRequest -Uri "http://127.0.0.1:8000/v1/auth/token" -Headers @{ "x-api-key"="changeme" }
-```
-
----
-
-## Config
-
-Edit `.env`:
-```
-AEGIS_API_KEY=changeme
-AEGIS_FAIL_CLOSED=false
-AEGIS_CORS_ORIGINS=*
-AEGIS_RATE_LIMIT_BACKEND=memory
-AEGIS_LLM_ENABLED=true
-AEGIS_LLM_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
-AEGIS_LLM_MODEL=qwen2.5-3b-instruct
-AEGIS_DB_ENABLED=true
-DATABASE_URL=sqlite:///aegis.db
-```
-
-Production baseline:
-```powershell
-Copy-Item .env.production.example .env
-```
-In production (`AEGIS_ENV=prod`), startup hardening rejects:
-- default API key / JWT secret
-- wildcard CORS (`*`)
-- memory-backed rate limiting
-- fail-open mode
-
-## Guardrail Regression Tests
+## Tests
 
 ```powershell
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-CI enforcement is configured in:
-- `.github/workflows/guardrail-regression.yml`
+## CI
 
----
-
-## Docker
-
-```powershell
-docker compose up --build
-```
-
----
+- Guardrail regression: `.github/workflows/guardrail-regression.yml`
+- Quality + policy validation + trend artifact: `.github/workflows/guardrail-quality.yml`
 
 ## Docs
 
-- `SYSTEM_ARCHITECTURE.md` — full system walkthrough
-- `CONTRIBUTING.md` — how to contribute
-- `SECURITY.md` — security policy
-- `AGENT_INTEGRATION_README.md` — attaching Aegis to real user agents
-
----
-
-## License
-
-MIT (for coursework / demo use)
+- `SYSTEM_ARCHITECTURE.md`
+- `AGENT_INTEGRATION_README.md`
+- `SECURITY.md`
+- `research/aegis_project_guardrails_research_20260302_v2.pdf`
+- `PRESENTATION_PLAYBOOK.md`
