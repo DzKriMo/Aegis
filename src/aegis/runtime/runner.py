@@ -86,6 +86,8 @@ class GuardedRuntime:
         )
         updated["quarantined"] = bool(updated.get("quarantined", False)) or should_quarantine(updated)
         self._set_risk_state(session_id, updated)
+        persisted = self._get_risk_state(session_id)
+        updated["last_event_hash"] = persisted.get("last_event_hash", updated.get("last_event_hash", "GENESIS"))
         if updated.get("quarantined", False) and not risk_state.get("quarantined", False):
             self.store.log_event(
                 session_id,

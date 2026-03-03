@@ -138,6 +138,15 @@ def get_session(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
     return store.get_session(session_id)
 
+@router.get("/sessions/{session_id}/risk", dependencies=[Depends(require_api_key)])
+def get_session_risk(session_id: str):
+    if not store.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    getter = getattr(store, "get_risk_state", None)
+    if callable(getter):
+        return {"risk_state": getter(session_id)}
+    return {"risk_state": {}}
+
 @router.get("/policies", dependencies=[Depends(require_api_key)])
 def get_policies():
     return {"policies": runtime.policy_engine.policies}

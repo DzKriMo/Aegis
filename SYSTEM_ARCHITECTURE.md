@@ -171,4 +171,30 @@ See `.env` for:
 
 ---
 
+## 10. Control Plane Safety (Level 2)
+
+- **Trajectory risk state** per session:
+  - `cumulative_risk_score`
+  - `goal_drift_score`
+  - `injection_attempt_count`
+  - `sensitive_tool_attempts`
+- **Quarantine mode**:
+  - auto-enabled when trajectory risk crosses threshold
+  - sensitive tools are blocked
+  - tool calls are forced into approval flow
+- **OOD-aware thresholds**:
+  - local classifier entropy/distance builds an OOD score
+  - warn/block thresholds are lowered dynamically under uncertainty
+- **Action-centric risk fusion**:
+  - tool risk modifier is fused with text/policy risk before execution
+  - high combined risk can force approval or block
+- **Tool output sanitizer**:
+  - scans tool outputs for prompt-injection patterns
+  - wraps post-tool policy evaluation with `<UNTRUSTED_TOOL_DATA>`
+- **Tamper-evident audit chain**:
+  - each event includes `prev_event_hash` and `event_hash`
+  - hash chain makes session event logs tamper-evident
+
+---
+
 End of document.

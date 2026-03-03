@@ -14,6 +14,9 @@ Aegis is a policy-driven runtime guardrail layer for agentic systems. It enforce
 - External evaluation suite expanded (public datasets + large-corpus builder).
 - Local classifier path supports both NB JSON and TF-IDF + Logistic Regression (`.joblib`).
 - Benchmark drift/trend reporting script and CI quality workflow.
+- Stateful trajectory-risk control plane with quarantine mode.
+- Action-centric tool risk fusion and OOD-driven dynamic thresholds.
+- Tamper-evident audit chain (`prev_event_hash` -> `event_hash`) for each event.
 
 ## Core Features
 
@@ -62,6 +65,10 @@ AEGIS_LOCAL_BLOCK_THRESHOLD=0.78
 AEGIS_LOCAL_WARN_THRESHOLD=0.64
 AEGIS_LOCAL_APPEAL_LLM_ENABLED=false
 AEGIS_LOCAL_APPEAL_CONF_THRESHOLD=0.62
+AEGIS_QUARANTINE_THRESHOLD=0.95
+AEGIS_OOD_WARN_THRESHOLD=0.72
+AEGIS_ACTION_RISK_APPROVAL_THRESHOLD=0.75
+AEGIS_ACTION_RISK_BLOCK_THRESHOLD=1.1
 ```
 
 ## Dataset and Benchmark Scripts

@@ -74,5 +74,9 @@ class InMemoryStore:
         if session_id not in self.sessions:
             self.create_session(session_id)
         merged = dict(self.sessions[session_id].get("risk_state") or {})
+        existing_hash = str(merged.get("last_event_hash", "GENESIS"))
         merged.update(state or {})
+        new_hash = str(merged.get("last_event_hash", "GENESIS"))
+        if new_hash == "GENESIS" and existing_hash != "GENESIS":
+            merged["last_event_hash"] = existing_hash
         self.sessions[session_id]["risk_state"] = merged
