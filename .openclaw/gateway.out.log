@@ -1,0 +1,7 @@
+|
+o  Config warnings -------------------------------------------------------+
+|                                                                         |
+|  - plugins.entries.aegis-guard: plugin aegis-guard: plugin id mismatch  |
+|    (manifest uses "aegis-guard", entry hints "openclaw-aegis-guard")    |
+|                                                                         |
++-------------------------------------------------------------------------+

@@ -1,0 +1,28 @@
+{
+  "providers": {
+    "local": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "apiKey": "local-free",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "qwen2.5-3b-instruct",
+          "name": "Qwen2.5 3B Instruct (Local llama.cpp)",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 32768,
+          "maxTokens": 2048,
+          "api": "openai-completions"
+        }
+      ]
+    }
+  }
+}

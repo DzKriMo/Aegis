@@ -1,0 +1,3 @@
+Config warnings:\n- plugins.entries.aegis-guard: plugin aegis-guard: plugin id mismatch (manifest uses "aegis-guard", entry hints "openclaw-aegis-guard")
+2026-03-05T14:30:25.669+01:00 Config warnings:\n- plugins.entries.aegis-guard: plugin aegis-guard: plugin id mismatch (manifest uses "aegis-guard", entry hints "openclaw-aegis-guard")
+2026-03-05T14:30:25.683+01:00 Force: Error: fuser permission denied while forcing gateway port

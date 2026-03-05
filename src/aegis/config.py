@@ -59,6 +59,15 @@ class Settings:
         self.aegis_llm_endpoint = _get("AEGIS_LLM_ENDPOINT", "http://127.0.0.1:8080/v1/chat/completions")
         self.aegis_llm_timeout = _get_int("AEGIS_LLM_TIMEOUT", 12)
         self.aegis_llm_model = _get("AEGIS_LLM_MODEL", "qwen2.5-3b-instruct")
+        self.aegis_model_enabled = _get_bool("AEGIS_MODEL_ENABLED", False)
+        self.aegis_model_endpoint = _get("AEGIS_MODEL_ENDPOINT", self.aegis_llm_endpoint)
+        self.aegis_model_timeout = _get_int("AEGIS_MODEL_TIMEOUT", 30)
+        self.aegis_model_name = _get("AEGIS_MODEL_NAME", self.aegis_llm_model)
+        self.aegis_model_max_tokens = _get_int("AEGIS_MODEL_MAX_TOKENS", 500)
+        self.aegis_model_system_prompt = _get(
+            "AEGIS_MODEL_SYSTEM_PROMPT",
+            "You are a concise and safe assistant. Refuse harmful requests and prioritize secure behavior.",
+        )
         self.aegis_local_classifier_enabled = _get_bool("AEGIS_LOCAL_CLASSIFIER_ENABLED", False)
         self.aegis_local_classifier_path = _get("AEGIS_LOCAL_CLASSIFIER_PATH", "models/guardrail_nb.json")
         self.aegis_local_block_threshold = _get_float("AEGIS_LOCAL_BLOCK_THRESHOLD", 0.78)

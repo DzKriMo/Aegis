@@ -1,0 +1,98 @@
+﻿<!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Aegis Dashboard</title>
+                <link rel="stylesheet" href="/static/dashboard/dashboard.css" />
+      </head>
+      <body>
+        <header class="topbar">
+          <div class="brand">
+            <div class="logo"></div>
+            <strong>Aegis Guardrail Citadel</strong>
+          </div>
+          <div class="inline">
+            <span id="status" class="status">Disconnected</span>
+            <button class="btn" onclick="refreshAll()">Refresh</button>
+          </div>
+        </header>
+        <div class="shell">
+          <aside class="panel">
+            <div class="title">Access</div>
+            <input id="apiKey" class="input" placeholder="x-api-key" />
+            <div style="height:8px"></div>
+            <button class="btn primary" onclick="saveKey()">Save Key</button>
+            <div class="title">Sessions</div>
+            <input id="sessionSearch" class="input" placeholder="Search session id" oninput="renderSessions()" />
+            <div class="sessions" id="sessions"></div>
+            <div class="title">Quick Payloads</div>
+            <div class="inline">
+              <button class="btn" onclick="seedPayload('pii')">PII</button>
+              <button class="btn" onclick="seedPayload('inject')">Inject</button>
+              <button class="btn" onclick="seedPayload('safe')">Safe</button>
+            </div>
+          </aside>
+          <main class="panel">
+            <section class="kpis">
+              <div class="kpi"><div class="title">Session</div><div class="v" id="sessionId">None</div></div>
+              <div class="kpi"><div class="title">Requests</div><div class="v" id="requestCount">0</div></div>
+              <div class="kpi"><div class="title">Risky</div><div class="v" id="riskyCount">0</div></div>
+              <div class="kpi"><div class="title">Refresh</div><div class="v" id="lastUpdate">-</div></div>
+            </section>
+            <section class="row">
+              <div class="panel">
+                <div class="title">Grouped Request Traces</div>
+                <div class="inline">
+                  <select id="statusFilter" class="select" style="max-width:170px" onchange="renderRequests()">
+                    <option value="">All statuses</option>
+                    <option value="allow">ALLOW</option>
+                    <option value="warn">WARN</option>
+                    <option value="approval">APPROVAL</option>
+                    <option value="block">BLOCK</option>
+                  </select>
+                  <input id="requestSearch" class="input" style="max-width:250px" placeholder="Search content or stages" oninput="renderRequests()" />
+                  <label class="tiny"><input type="checkbox" id="autoRefresh" checked onchange="toggleAutoRefresh()" /> live</label>
+                </div>
+                <div id="requests" class="request-list"></div>
+                <div class="title">Selected Trace</div>
+                <div id="traceInfo" class="tiny">Select a request to inspect stage-by-stage decisions.</div>
+                <div id="trace" class="trace"></div>
+                <div class="title">Test Guarded Message</div>
+                <textarea id="testMessage" class="textarea" placeholder="Send a message through guardrails"></textarea>
+                <div style="height:8px"></div>
+                <div class="inline">
+                  <button class="btn primary" id="sendTestBtn" onclick="sendTestMessage()">Send</button>
+                  <span class="tiny" id="testState">idle</span>
+                </div>
+                <pre id="testResponse" class="term">No test requests yet.</pre>
+              </div>
+              <div class="panel">
+                <div class="title">Outcome Mix</div>
+                <div class="inline">
+                  <span class="pill ok" id="countAllow">allow: 0</span>
+                  <span class="pill warn" id="countWarn">warn: 0</span>
+                  <span class="pill approval" id="countApproval">approval: 0</span>
+                  <span class="pill block" id="countBlock">block: 0</span>
+                </div>
+                <div id="mixBar" class="bar"></div>
+                <div class="title">Risk Trend</div>
+                <svg id="riskSpark" class="spark" viewBox="0 0 320 90" preserveAspectRatio="none"></svg>
+                <div class="title">Classifier Notes</div>
+                <div id="modelNotes" class="tiny">No requests yet.</div>
+                <div class="title">Tool Tester</div>
+                <input id="toolName" class="input" value="shell" placeholder="tool name" />
+                <div style="height:6px"></div>
+                <textarea id="toolPayload" class="textarea" style="min-height:70px">{"command":"echo hello"}</textarea>
+                <div style="height:6px"></div>
+                <input id="toolEnv" class="input" value="dev" placeholder="environment" />
+                <div style="height:8px"></div>
+                <button class="btn" onclick="sendToolTest()">Run Tool Gate</button>
+                <pre id="toolResponse" class="term">No tool tests yet.</pre>
+              </div>
+            </section>
+          </main>
+        </div>
+                <script src="/static/dashboard/dashboard.js"></script>
+      </body>
+    </html>

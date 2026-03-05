@@ -35,7 +35,7 @@ Aegis is a policy-driven runtime guardrail layer for agentic systems. It enforce
 python -m uvicorn aegis.api.main:app --port 8000
 ```
 
-Dashboard:
+Dashboard: 
 
 ```text
 http://127.0.0.1:8000/v1/dashboard
@@ -47,6 +47,8 @@ http://127.0.0.1:8000/v1/dashboard
 .\llama.cpp\llama-server.exe -m models\qwen2.5-3b-instruct-q4_k_m.gguf --port 8080 --n-gpu-layers 35 --ctx-size 2048
 $env:AEGIS_LLM_ENABLED="true"
 $env:AEGIS_LLM_ENDPOINT="http://127.0.0.1:8080/v1/chat/completions"
+$env:AEGIS_MODEL_ENABLED="true"
+$env:AEGIS_MODEL_ENDPOINT="http://127.0.0.1:8080/v1/chat/completions"
 python -m uvicorn aegis.api.main:app --port 8000
 ```
 
@@ -75,6 +77,44 @@ AEGIS_STAGE_DISAGREEMENT_THRESHOLD=2
 AEGIS_POLICY_VERSION=v1
 AEGIS_DETECTOR_VERSION=v1
 AEGIS_MODEL_HASH=unknown
+AEGIS_MODEL_ENABLED=true
+AEGIS_MODEL_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
+AEGIS_MODEL_NAME=qwen2.5-3b-instruct
+AEGIS_MODEL_TIMEOUT=30
+```
+
+## External Agent Mode
+
+For real agent wiring where your agent controls model/tool orchestration:
+
+- `POST /v1/sessions/{id}/guard/input`
+- `POST /v1/sessions/{id}/tools/execute`
+- `POST /v1/sessions/{id}/guard/output`
+
+Reference runner (free local model endpoint compatible, e.g. Ollama):
+
+```powershell
+python scripts/lightweight_agent_runner.py
+```
+
+## OpenClaw Direct Stack
+
+One-command local stack (Aegis + OpenClaw gateway + Aegis OpenClaw plugin config):
+
+```powershell
+.\scripts\run_aegis_openclaw_stack.ps1 -AegisApiKey "<your-key>" -OpenDashboard
+```
+
+Free local stack (llama.cpp + Aegis + OpenClaw, no paid API keys):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_aegis_openclaw_free.ps1 -AegisApiKey "<your-key>" -OpenDashboard
+```
+
+Smoke test:
+
+```powershell
+.\scripts\test_aegis_openclaw.ps1 -AegisApiKey "<your-key>"
 ```
 
 ## Dataset and Benchmark Scripts

@@ -44,6 +44,35 @@ class MessageResponse(BaseModel):
     decision_message: Optional[str] = None
     approval_hash: Optional[str] = None
 
+
+class GuardInputResponse(BaseModel):
+    allowed: bool
+    blocked: bool
+    require_approval: bool
+    sanitized_content: Optional[str] = None
+    risk_score: float = 0.0
+    message: Optional[str] = None
+    approval_hash: Optional[str] = None
+
+
+class GuardOutputRequest(BaseModel):
+    content: str
+    metadata: Dict[str, Any] = {}
+    tenant_id: Optional[str] = None
+    role: Optional[str] = None
+    environment: Optional[str] = None
+    labels: List[str] = Field(default_factory=list)
+
+
+class GuardOutputResponse(BaseModel):
+    allowed: bool
+    blocked: bool
+    require_approval: bool
+    sanitized_output: Optional[str] = None
+    risk_score: float = 0.0
+    message: Optional[str] = None
+    approval_hash: Optional[str] = None
+
 class ApprovalRequest(BaseModel):
     approval_hash: str
 
@@ -63,6 +92,44 @@ class ToolExecuteResponse(BaseModel):
     message: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     approval_hash: Optional[str] = None
+
+
+class ToolGuardPreRequest(BaseModel):
+    tool_name: str
+    payload: Dict[str, Any] = {}
+    environment: Optional[str] = None
+    tenant_id: Optional[str] = None
+    role: Optional[str] = None
+    labels: List[str] = Field(default_factory=list)
+
+
+class ToolGuardPreResponse(BaseModel):
+    allowed: bool
+    blocked: bool
+    require_approval: bool
+    message: Optional[str] = None
+    risk_score: float = 0.0
+    approval_hash: Optional[str] = None
+    sanitized_payload: Optional[Dict[str, Any]] = None
+
+
+class ToolGuardPostRequest(BaseModel):
+    tool_name: str
+    result: Any = {}
+    environment: Optional[str] = None
+    tenant_id: Optional[str] = None
+    role: Optional[str] = None
+    labels: List[str] = Field(default_factory=list)
+
+
+class ToolGuardPostResponse(BaseModel):
+    allowed: bool
+    blocked: bool
+    require_approval: bool
+    message: Optional[str] = None
+    risk_score: float = 0.0
+    approval_hash: Optional[str] = None
+    sanitized_result: Optional[Any] = None
 
 class PolicyUpdateRequest(BaseModel):
     policies: List[Dict[str, Any]]
@@ -138,6 +205,41 @@ def send_message(session_id: str, req: MessageRequest):
         approval_hash=result.approval_hash,
     )
 
+
+@router.post("/sessions/{session_id}/guard/input", response_model=GuardInputResponse, dependencies=[Depends(require_api_key)])
+def guard_input(session_id: str, req: MessageRequest):
+    if not store.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    result = runtime.guard_user_input(
+        session_id=session_id,
+        content=req.content,
+        metadata=req.metadata,
+        tenant_id=req.tenant_id,
+        role=req.role,
+        environment=req.environment,
+        labels=req.labels,
+        url_allowlist=req.url_allowlist,
+        url_denylist=req.url_denylist,
+        urls=req.urls,
+    )
+    return GuardInputResponse(**result)
+
+
+@router.post("/sessions/{session_id}/guard/output", response_model=GuardOutputResponse, dependencies=[Depends(require_api_key)])
+def guard_output(session_id: str, req: GuardOutputRequest):
+    if not store.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    result = runtime.guard_model_output(
+        session_id=session_id,
+        output_text=req.content,
+        metadata=req.metadata,
+        tenant_id=req.tenant_id,
+        role=req.role,
+        environment=req.environment,
+        labels=req.labels,
+    )
+    return GuardOutputResponse(**result)
+
 @router.post("/sessions/{session_id}/approvals", dependencies=[Depends(require_api_key)])
 def approve_action(session_id: str, req: ApprovalRequest):
     if not store.session_exists(session_id):
@@ -163,6 +265,38 @@ def execute_tool(session_id: str, req: ToolExecuteRequest):
         role=req.role,
         labels=req.labels,
     )
+
+
+@router.post("/sessions/{session_id}/guard/tool-pre", response_model=ToolGuardPreResponse, dependencies=[Depends(require_api_key)])
+def guard_tool_pre(session_id: str, req: ToolGuardPreRequest):
+    if not store.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    result = runtime.guard_tool_call_pre(
+        session_id=session_id,
+        tool_name=req.tool_name,
+        payload=req.payload,
+        environment=req.environment,
+        tenant_id=req.tenant_id,
+        role=req.role,
+        labels=req.labels,
+    )
+    return ToolGuardPreResponse(**result)
+
+
+@router.post("/sessions/{session_id}/guard/tool-post", response_model=ToolGuardPostResponse, dependencies=[Depends(require_api_key)])
+def guard_tool_post(session_id: str, req: ToolGuardPostRequest):
+    if not store.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    result = runtime.guard_tool_call_post(
+        session_id=session_id,
+        tool_name=req.tool_name,
+        result=req.result,
+        environment=req.environment,
+        tenant_id=req.tenant_id,
+        role=req.role,
+        labels=req.labels,
+    )
+    return ToolGuardPostResponse(**result)
 
 @router.get("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
 def get_session(session_id: str):

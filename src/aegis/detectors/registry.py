@@ -11,6 +11,7 @@ from .simple import (
     detect_high_risk_abuse,
     detect_suspicious_disclosure,
     detect_caution_disclosure,
+    detect_internal_prompt_extraction,
     detect_ml_block_intent,
     detect_ml_warn_intent,
 )
@@ -36,6 +37,7 @@ class DetectorRegistry:
                 "high_risk_abuse": detect_high_risk_abuse,
                 "suspicious_disclosure": detect_suspicious_disclosure,
                 "caution_disclosure": detect_caution_disclosure,
+                "internal_prompt_extraction": detect_internal_prompt_extraction,
                 "ml_block_intent": detect_ml_block_intent,
                 "ml_warn_intent": detect_ml_warn_intent,
             }

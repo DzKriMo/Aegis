@@ -24,7 +24,10 @@ JAILBREAK_PATTERNS = [
     r"bypass (all )?(safety|guardrails?|restrictions?)",
 ]
 
-PII_PATTERNS = [r"\b\d{3}-\d{2}-\d{4}\b", r"\b\d{16}\b"]
+PII_PATTERNS = [
+    r"\b\d{3}-\d{2}-\d{4}\b",
+    r"\b(?:\d[ -]*?){13,19}\b",
+]
 
 SECRET_PATTERNS = [
     r"AKIA[0-9A-Z]{16}",
@@ -88,18 +91,28 @@ TASK_VERBS = re.compile(r"\b(summarize|summarise|translate|analyze|analyse|answe
 LEAK_VERBS = re.compile(r"\b(output|reveal|print|show|display|dump|expose|list|tell)\b", re.IGNORECASE)
 DISCLOSURE_QUERY_VERBS = re.compile(r"\b(what|which|show|tell|list|print|reveal|output|dump|display)\b", re.IGNORECASE)
 SENSITIVE_TARGETS = re.compile(
-    r"\b(system (prompt|configuration|instructions?)|initial instructions?|instructions you were initialized with|developer message|hidden instructions?|hidden policies?|internal (rules|config|policy)|policies govern your responses|chain[- ]of[- ]thought|environment variables?|env vars?|\.env|/etc/passwd|/etc/shadow|jwt secret|api key)\b",
+    r"\b(system (prompt|configuration|instructions?)|initial instructions?|initialization instructions?|initial alignment preamble|policy scaffolding|policy memory|guardrail parameters?|instructions you were initialized with|developer message|hidden instructions?|hidden policies?|internal (rules|config|policy|safety constraints?)|policies govern your responses|instruction hierarchy|reasoning trace|chain[- ]of[- ]thought|environment variables?|env vars?|\.env|/etc/passwd|/etc/shadow|jwt secret|api key)\b",
     re.IGNORECASE,
 )
 SEQUENCE_MARKERS = re.compile(r"\b(before answering|before you answer|before doing that|first[, ]|then[, ]|also[, ]|prior to answering)\b", re.IGNORECASE)
 RESEARCH_CONTEXT = re.compile(r"\b(example|for example|demonstrate|demonstration|explain|analyze|analysis|awareness|training|defensive|red team|research|high[- ]level|dangerous|risky|for awareness|do not execute)\b", re.IGNORECASE)
 FICTION_CONTEXT = re.compile(r"\b(fiction|fictional|story|novel|script|roleplay)\b", re.IGNORECASE)
 DIRECT_IMPERATIVE = re.compile(r"\b(ignore|disregard|forget|override|reveal|output|print|dump|show|display|expose|tell|list|run|execute|open|read|cat)\b", re.IGNORECASE)
+SIMULATION_VERBS = re.compile(r"\b(simulate|fictional scenario|illustrative example|what (?:were|are) you (?:originally )?given)\b", re.IGNORECASE)
 SOFT_QUALIFIERS = re.compile(r"\b(high[- ]level|broad terms|if possible|briefly|no secrets|for reproducibility|for auditing|safely disclose)\b", re.IGNORECASE)
 SECURITY_ATTACK_DISCUSSION = re.compile(
     r"\b(prompt injection|jailbreak)\b.{0,48}\b(attack|payload|instruction|example|malicious)\b",
     re.IGNORECASE,
 )
+INTERNAL_PROMPT_EXTRACTION_PATTERNS = [
+    r"\b(simulate|show|reveal|output|print|list|dump|display|tell)\b.{0,140}\b(hidden|internal|system|developer)\b.{0,80}\b(instructions?|prompt|configuration|constraints?|rules?)\b",
+    r"\b(before answering|prior to answering)\b.{0,120}\b(reveal|print|output|show)\b.{0,120}\b(system prompt|env vars?|environment variables?)\b",
+    r"\b(authority|compliance|audit)\b.{0,120}\b(reveal|provide|show)\b.{0,120}\b(hidden instructions?|instruction hierarchy|internal config)\b",
+    r"\bappend\b.{0,120}\b(actual|real)\b.{0,80}\b(system prompt|hidden instructions?)\b",
+    r"\bcontinue the text exactly from where\b.{0,80}\b(hidden instructions?)\b",
+    r"\bsupervisor agent says\b.{0,120}\b(reveal|disclose|show)\b",
+    r"\bcall\b.{0,80}\b(internal|policy)\b.{0,80}\b(tool|memory)\b",
+]
 
 BASE64_TOKEN = re.compile(r"\b[A-Za-z0-9+/]{24,}={0,2}\b")
 HEX_TOKEN = re.compile(r"\b(?:[0-9a-fA-F]{2}){12,}\b")
@@ -159,16 +172,35 @@ def _contains_obfuscated_attack(text: str) -> bool:
     return False
 
 
-def _has_direct_sensitive_exfil_request(text: str) -> bool:
-    if SOFT_QUALIFIERS.search(text):
+def _looks_like_pan(value: str) -> bool:
+    digits = re.sub(r"\D", "", value or "")
+    if len(digits) < 13 or len(digits) > 19:
         return False
+    total = 0
+    reverse = digits[::-1]
+    for idx, ch in enumerate(reverse):
+        n = ord(ch) - ord("0")
+        if idx % 2 == 1:
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+    return total % 10 == 0
+
+
+def _has_direct_sensitive_exfil_request(text: str) -> bool:
     # Treat quoted/example-driven research phrasing as non-imperative by default.
     if RESEARCH_CONTEXT.search(text) and re.search(r"\b(example|for example|like)\b", text, re.IGNORECASE) and not LEAK_VERBS.search(text):
         return False
     has_sensitive_target = bool(SENSITIVE_TARGETS.search(text))
     if not has_sensitive_target:
         return False
-    has_strong_verb = bool(LEAK_VERBS.search(text) or DIRECT_IMPERATIVE.search(text))
+    has_strong_verb = bool(
+        LEAK_VERBS.search(text)
+        or DIRECT_IMPERATIVE.search(text)
+        or DISCLOSURE_QUERY_VERBS.search(text)
+        or SIMULATION_VERBS.search(text)
+    )
     return has_strong_verb
 
 
@@ -242,7 +274,11 @@ def detect_jailbreak(text: str, context: Dict) -> bool:
 
 def detect_pii(text: str, context: Dict) -> bool:
     llm = context.get("llm_classification", {})
-    return _match_any(PII_PATTERNS, text) or bool(llm.get("pii", False))
+    if re.search(PII_PATTERNS[0], text):
+        return True
+    if any(_looks_like_pan(m.group(0)) for m in re.finditer(PII_PATTERNS[1], text)):
+        return True
+    return bool(llm.get("pii", False))
 
 
 def detect_secrets(text: str, context: Dict) -> bool:
@@ -282,7 +318,7 @@ def detect_caution_disclosure(text: str, context: Dict) -> bool:
 
 def detect_exfiltration(text: str, context: Dict) -> bool:
     matcher = SemanticMatcher.from_env()
-    if _is_explicit_safety_education(text, matcher):
+    if _is_explicit_safety_education(text, matcher) and not SENSITIVE_TARGETS.search(text):
         return False
 
     labels = context.get("labels") or []
@@ -312,6 +348,12 @@ def detect_goal_hijack(text: str, context: Dict) -> bool:
         return True
 
     return _match_any(GOAL_HIJACK, text) or matcher.match("goal_hijack", text) or bool(llm.get("goal_hijack", False))
+
+
+def detect_internal_prompt_extraction(text: str, context: Dict) -> bool:
+    if _has_direct_sensitive_exfil_request(text):
+        return True
+    return _match_any(INTERNAL_PROMPT_EXTRACTION_PATTERNS, text)
 
 
 def detect_data_leakage(text: str, context: Dict) -> bool:

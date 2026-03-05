@@ -29,6 +29,17 @@ policies:
   message: Prompt injection / goal hijack detected
   risk: 0.9
 
+- id: block_internal_prompt_extraction
+  stage: prellm
+  match:
+    any:
+    - detector: internal_prompt_extraction
+    - detector: exfiltration
+    - regex: "(initial alignment preamble|policy scaffolding|instruction hierarchy|reasoning trace|hidden (system )?instructions?|system prompt|environment variables?|env vars?)"
+  action: block
+  message: Internal prompt/config extraction attempt detected
+  risk: 0.95
+
 - id: block_high_risk_abuse
   stage: prellm
   match:
@@ -80,13 +91,41 @@ policies:
   message: Potential exfiltration intent detected
   risk: 0.5
 
+- id: redact_pii_prellm
+  stage: prellm
+  match:
+    any:
+    - detector: pii
+  action: redact
+  redaction: '[REDACTED_PII_INPUT]'
+  message: Input contains potential PII and will be redacted
+  risk: 0.35
+
 - id: redact_pii
   stage: postllm
   match:
     any:
     - detector: pii
+  action: block
+  message: Output contains PII and is blocked
+  risk: 0.9
+
+- id: redact_pii_tool_pre
+  stage: tool_pre
+  match:
+    any:
+    - detector: pii
   action: redact
-  redaction: '[REDACTED]'
+  redaction: '[REDACTED_TOOL_INPUT]'
+  risk: 0.4
+
+- id: redact_pii_tool_post
+  stage: tool_post
+  match:
+    any:
+    - detector: pii
+  action: redact
+  redaction: '[REDACTED_TOOL_OUTPUT]'
   risk: 0.4
 
 - id: block_secrets

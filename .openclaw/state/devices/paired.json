@@ -1,0 +1,79 @@
+{
+  "787f5fc155a9094e762e6b9c509ea7c02bf62d8339dac0bb62903473b90b01e5": {
+    "deviceId": "787f5fc155a9094e762e6b9c509ea7c02bf62d8339dac0bb62903473b90b01e5",
+    "publicKey": "wCj-X0Rr-CXgqiuViAlW6IIhIBHUM-bVBgPR5q8v_QM",
+    "platform": "win32",
+    "clientId": "cli",
+    "clientMode": "cli",
+    "role": "operator",
+    "roles": [
+      "operator"
+    ],
+    "scopes": [
+      "operator.read",
+      "operator.admin",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing"
+    ],
+    "approvedScopes": [
+      "operator.read",
+      "operator.admin",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing"
+    ],
+    "tokens": {
+      "operator": {
+        "token": "O8026Ic2-G1g7y1LjIxa_GM6XIkzXXzwhY44anYB6ns",
+        "role": "operator",
+        "scopes": [
+          "operator.admin",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.read",
+          "operator.write"
+        ],
+        "createdAtMs": 1772717460763,
+        "rotatedAtMs": 1772717592052
+      }
+    },
+    "createdAtMs": 1772717460763,
+    "approvedAtMs": 1772717592052
+  },
+  "b9cc706ddf1313a4c966b119ffef8369a266cc9a7383db2bde0f0892bbeeb0c1": {
+    "deviceId": "b9cc706ddf1313a4c966b119ffef8369a266cc9a7383db2bde0f0892bbeeb0c1",
+    "publicKey": "SNUmdEccv0KDnY_wwCxyDq_4-lV39BgWKpPBXNlc5E0",
+    "platform": "Win32",
+    "clientId": "openclaw-control-ui",
+    "clientMode": "webchat",
+    "role": "operator",
+    "roles": [
+      "operator"
+    ],
+    "scopes": [
+      "operator.admin",
+      "operator.approvals",
+      "operator.pairing"
+    ],
+    "approvedScopes": [
+      "operator.admin",
+      "operator.approvals",
+      "operator.pairing"
+    ],
+    "tokens": {
+      "operator": {
+        "token": "JTfyc-FKl8zyk8lFibtsz_w-8Bk_xWbFDlc45zywtZU",
+        "role": "operator",
+        "scopes": [
+          "operator.admin",
+          "operator.approvals",
+          "operator.pairing"
+        ],
+        "createdAtMs": 1772717622231
+      }
+    },
+    "createdAtMs": 1772717622231,
+    "approvedAtMs": 1772717622231
+  }
+}

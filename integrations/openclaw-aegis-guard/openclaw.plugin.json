@@ -1,0 +1,38 @@
+{
+  "id": "aegis-guard",
+  "name": "Aegis Guard",
+  "description": "Guards OpenClaw tool calls and outbound messages through Aegis APIs.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "aegisUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8000/v1"
+      },
+      "apiKey": {
+        "type": "string"
+      },
+      "apiKeyEnv": {
+        "type": "string",
+        "default": "AEGIS_API_KEY"
+      },
+      "environment": {
+        "type": "string",
+        "default": "dev"
+      },
+      "guardOutboundMessages": {
+        "type": "boolean",
+        "default": true
+      },
+      "observeLlmIo": {
+        "type": "boolean",
+        "default": true
+      },
+      "enforceInputGate": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}

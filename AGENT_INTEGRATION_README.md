@@ -163,3 +163,111 @@ Aegis is a guardrail layer, not a complete security perimeter. Keep standard con
 - endpoint authz
 - audit logging
 - incident response playbooks
+
+## 11. External Agent Guard Endpoints
+
+When your agent runs its own model loop, use these endpoints:
+
+- Input pre-check: `POST /v1/sessions/{session_id}/guard/input`
+- Output post-check: `POST /v1/sessions/{session_id}/guard/output`
+- Tool pre-check: `POST /v1/sessions/{session_id}/guard/tool-pre`
+- Tool post-check: `POST /v1/sessions/{session_id}/guard/tool-post`
+
+Input pre-check returns:
+- `allowed`
+- `blocked`
+- `require_approval`
+- `sanitized_content`
+- `approval_hash`
+
+Output post-check returns:
+- `allowed`
+- `blocked`
+- `require_approval`
+- `sanitized_output`
+- `approval_hash`
+
+This allows the external agent to own generation/tool orchestration while Aegis enforces policy.
+
+## 12. Lightweight Agent Runner (Free Local Models)
+
+Included script:
+
+```powershell
+python scripts/lightweight_agent_runner.py
+```
+
+Default model endpoint is Ollama-compatible:
+- `AGENT_MODEL_ENDPOINT=http://127.0.0.1:11434/v1/chat/completions`
+- `AGENT_MODEL_NAME=qwen2.5:3b-instruct`
+
+Required Aegis env:
+- `AEGIS_API_KEY`
+- `AEGIS_BASE_URL` (optional, defaults to `http://127.0.0.1:8000/v1`)
+
+Flow in the runner:
+1. Guard user input with `/guard/input`.
+2. Call model.
+3. Route tool calls through `/tools/execute`.
+4. Guard final answer with `/guard/output`.
+5. Print only approved/sanitized output.
+
+## 13. OpenClaw Bridge (Input/Output Guarding)
+
+OpenClaw source is cloneable in this workspace (for local experimentation), and a bridge script is included:
+
+```powershell
+python scripts/openclaw_aegis_bridge.py --message "Summarize this repo status"
+```
+
+What it does:
+1. Creates an Aegis session.
+2. Guards inbound message via `/guard/input`.
+3. Runs `openclaw agent --message ...`.
+4. Guards outbound text via `/guard/output`.
+5. Emits only approved/sanitized output.
+
+Note: this bridge guards OpenClaw I/O. If you also need per-tool enforcement, use the lightweight runner pattern where tool calls are proxied through `/tools/execute`.
+
+## 14. OpenClaw Direct Plugin Guarding
+
+A local OpenClaw plugin is included at:
+
+- `integrations/openclaw-aegis-guard`
+
+It wires OpenClaw hooks directly to Aegis:
+
+- `before_tool_call` -> `POST /v1/sessions/{id}/guard/tool-pre`
+- `after_tool_call` -> `POST /v1/sessions/{id}/guard/tool-post`
+- `message_sending` -> `POST /v1/sessions/{id}/guard/output`
+
+Install + enable:
+
+```powershell
+openclaw plugins install -l integrations/openclaw-aegis-guard
+openclaw plugins enable aegis-guard
+openclaw config set plugins.entries.aegis-guard.config.aegisUrl "http://127.0.0.1:8000/v1"
+openclaw config set plugins.entries.aegis-guard.config.apiKeyEnv "AEGIS_API_KEY"
+openclaw config set plugins.entries.aegis-guard.config.environment "dev"
+```
+
+Restart gateway after config changes.
+
+## 15. Run/Test/Visualize Scripts
+
+- Start full stack (Aegis + OpenClaw gateway + plugin config):
+
+```powershell
+.\scripts\run_aegis_openclaw_stack.ps1 -AegisApiKey "<your-key>" -OpenDashboard
+```
+
+- Run smoke tests:
+
+```powershell
+.\scripts\test_aegis_openclaw.ps1 -AegisApiKey "<your-key>"
+```
+
+- Visualization:
+  - Dashboard UI: `http://127.0.0.1:8000/v1/dashboard`
+  - Session detail API: `GET /v1/sessions/{session_id}`
+  - Risk state API: `GET /v1/sessions/{session_id}/risk`

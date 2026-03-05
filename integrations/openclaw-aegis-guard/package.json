@@ -1,0 +1,10 @@
+{
+  "name": "@local/openclaw-aegis-guard",
+  "version": "0.1.0",
+  "private": true,
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
