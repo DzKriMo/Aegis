@@ -52,6 +52,36 @@ $env:AEGIS_MODEL_ENDPOINT="http://127.0.0.1:8080/v1/chat/completions"
 python -m uvicorn aegis.api.main:app --port 8000
 ```
 
+## Model Routing (Single vs Private/Public)
+
+By default, Aegis runs in `single` routing mode. In that mode, dashboard traces show `SINGLE LLM`.
+
+To use private/public routing, set `AEGIS_MODEL_ROUTING_MODE` and configure private/public model targets:
+
+```env
+# default:
+AEGIS_MODEL_ROUTING_MODE=single
+
+# alternatives:
+# AEGIS_MODEL_ROUTING_MODE=sensitivity
+# AEGIS_MODEL_ROUTING_MODE=metadata
+# AEGIS_MODEL_ROUTING_MODE=always_private
+# AEGIS_MODEL_ROUTING_MODE=always_public
+
+AEGIS_PRIVATE_MODEL_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
+AEGIS_PRIVATE_MODEL_NAME=qwen2.5-3b-instruct
+AEGIS_PRIVATE_MODEL_TIMEOUT=30
+
+AEGIS_PUBLIC_MODEL_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
+AEGIS_PUBLIC_MODEL_NAME=qwen2.5-3b-instruct
+AEGIS_PUBLIC_MODEL_TIMEOUT=30
+```
+
+Notes:
+
+- `single` and `disabled` modes always select the `single` route.
+- If a request is blocked before model execution, UI may still show the default single-route badge (no model route event exists).
+
 ## Important Config
 
 ```env
@@ -81,6 +111,13 @@ AEGIS_MODEL_ENABLED=true
 AEGIS_MODEL_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
 AEGIS_MODEL_NAME=qwen2.5-3b-instruct
 AEGIS_MODEL_TIMEOUT=30
+AEGIS_MODEL_ROUTING_MODE=single
+AEGIS_PRIVATE_MODEL_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
+AEGIS_PRIVATE_MODEL_NAME=qwen2.5-3b-instruct
+AEGIS_PRIVATE_MODEL_TIMEOUT=30
+AEGIS_PUBLIC_MODEL_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
+AEGIS_PUBLIC_MODEL_NAME=qwen2.5-3b-instruct
+AEGIS_PUBLIC_MODEL_TIMEOUT=30
 ```
 
 ## External Agent Mode

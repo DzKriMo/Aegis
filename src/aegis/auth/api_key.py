@@ -5,6 +5,9 @@ from .jwt import verify_token
 
 
 def require_api_key(x_api_key: str = Header(default=""), authorization: str = Header(default=""), request: Request = None):
+    if not settings.aegis_api_key_required:
+        return
+
     # Bearer token support
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()

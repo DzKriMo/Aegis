@@ -538,7 +538,7 @@ def dashboard():
             }
             const local = group.events.find(e => e.stage === 'local_classification');
             const pre = group.events.find(e => e.stage === 'prellm');
-            const post = group.events.find(e => e.stage === 'postllm');
+            const post = group.events.find(e => e.stage === 'output_firewall' || e.stage === 'postllm');
             const parts = [];
             if (local?.classification) parts.push(`Local: ${local.classification.label || 'ALLOW'} (${Number(local.classification.confidence || 0).toFixed(2)})`);
             if (pre?.decision) parts.push(`Pre-LLM: ${outcomeOfDecision(pre.decision).toUpperCase()}`);
@@ -558,7 +558,11 @@ def dashboard():
             group.events.forEach((e, idx) => {
               const d = document.createElement('div');
               d.className = 'stage';
-              const state = e.decision ? outcomeOfDecision(e.decision) : 'allow';
+              const state = e.decision
+                ? outcomeOfDecision(e.decision)
+                : (((e.stage === 'postllm.response' || e.stage === 'guardrail.response') && ['block', 'warn', 'approval'].includes(String(e.kind || '').toLowerCase()))
+                    ? String(e.kind || '').toLowerCase()
+                    : 'allow');
               d.innerHTML = `
                 <div class="inline" style="justify-content:space-between">
                   <div class="inline"><strong>${e.stage || 'event'}</strong>${badge(state)}</div>

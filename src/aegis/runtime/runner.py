@@ -12,6 +12,12 @@ from ..detectors.local_classifier import classify_guardrail_label
 from ..prellm.normalize import normalize_text
 from ..prellm.network import evaluate_urls
 from ..postllm.approval import approval_hash
+from ..postllm import (
+    assess_grounding,
+    build_audit_evidence,
+    enforce_least_privilege,
+    score_postllm_risk,
+)
 from ..config import settings
 from .model_client import generate_text
 from .risk_control import (
@@ -35,6 +41,13 @@ class RuntimeResult:
 
 
 class GuardedRuntime:
+    OUTPUT_FIREWALL_STAGE = "output_firewall"
+    OUTPUT_FIREWALL_GROUNDING_STAGE = "output_firewall.grounding"
+    OUTPUT_FIREWALL_RISK_STAGE = "output_firewall.risk"
+    OUTPUT_FIREWALL_AUDIT_STAGE = "output_firewall.audit"
+    OUTPUT_FIREWALL_TRANSFORM_STAGE = "output_firewall.transform"
+    POSTLLM_RESPONSE_STAGE = "postllm.response"
+
     def __init__(self, store):
         self.store = store
         self.detectors = DetectorRegistry.default()
@@ -85,14 +98,15 @@ class GuardedRuntime:
             return {k: self._mask_strings(v, replacement) for k, v in value.items()}
         return value
 
-    def _build_model_output(self, prompt_text: str) -> str:
+    def _build_model_output(self, prompt_text: str, route_hint: Optional[Dict[str, Any]] = None) -> tuple[str, Dict[str, Any]]:
         cleaned = " ".join((prompt_text or "").strip().split())
         if not cleaned:
             cleaned = "[empty input]"
         cleaned = cleaned[:1200]
         if settings.aegis_model_enabled:
-            return generate_text(cleaned)
-        return f"Model draft: {cleaned}"
+            generated, meta = generate_text(cleaned, route_hint=route_hint, return_meta=True)
+            return generated, meta
+        return f"Model draft: {cleaned}", {"route": "disabled", "model": "disabled", "endpoint": "", "anonymized": False}
 
     def _decision_severity(self, decision) -> int:
         if getattr(decision, "blocked", False):
@@ -102,6 +116,60 @@ class GuardedRuntime:
         if getattr(decision, "warn", False):
             return 1
         return 0
+
+    def _policy_block_message(self, reason: Optional[str] = None, user_request: Optional[str] = None) -> str:
+        request_text = " ".join(str(user_request or "").split())[:600]
+        reason_text = " ".join(str(reason or "").split())[:280]
+        if settings.aegis_model_enabled and request_text:
+            try:
+                prompt = (
+                    "You are a safety assistant. The user's request cannot be answered directly due to policy. "
+                    "Write a concise refusal plus 2 safe alternatives tailored to the request context. "
+                    "Do not include harmful instructions, operational abuse steps, or evasion tips. "
+                    "Keep it under 90 words.\n"
+                    f"User request: {request_text}\n"
+                    f"Policy reason: {reason_text or 'policy restriction'}"
+                )
+                generated = str(generate_text(prompt, route_hint={"policy_risk_score": 1.0}) or "").strip()
+                if generated:
+                    return generated
+            except Exception:
+                pass
+
+        base = (
+            "I can't answer that request because it goes against policy. "
+            "I can help with a safer alternative, like high-level guidance, defensive best practices, "
+            "or a compliant version of your question."
+        )
+        if reason_text:
+            return f"{base} Reason: {reason_text}"
+        return base
+
+    def _policy_warning_message(self, reason: Optional[str] = None, user_request: Optional[str] = None) -> str:
+        request_text = " ".join(str(user_request or "").split())[:600]
+        reason_text = " ".join(str(reason or "").split())[:280]
+        if settings.aegis_model_enabled and request_text:
+            try:
+                prompt = (
+                    "You are a safety assistant. The request is partially risky and needs a constrained response. "
+                    "Write a short warning sentence and suggest 1-2 safe alternatives specific to the request context. "
+                    "Do not include harmful instructions. Keep it under 70 words.\n"
+                    f"User request: {request_text}\n"
+                    f"Policy reason: {reason_text or 'possible policy risk'}"
+                )
+                generated = str(generate_text(prompt, route_hint={"policy_risk_score": 0.8}) or "").strip()
+                if generated:
+                    return generated
+            except Exception:
+                pass
+
+        base = (
+            "Policy warning: this request may violate policy, so the response is limited. "
+            "If you want, rephrase toward safe intent and I can provide a compliant alternative."
+        )
+        if reason_text:
+            return f"{base} Reason: {reason_text}"
+        return base
 
     def guard_user_input(
         self,
@@ -329,17 +397,57 @@ class GuardedRuntime:
         out_decision = self.policy_engine.evaluate(output_text, stage="postllm", detectors=self.detectors, context=context)
         _log(
             {
-                "stage": "postllm",
+                "stage": self.OUTPUT_FIREWALL_STAGE,
                 "content": output_text,
                 "decision": out_decision.to_dict(),
             },
         )
 
+        grounding = assess_grounding(output_text, context=context)
+        _log(
+            {
+                "stage": self.OUTPUT_FIREWALL_GROUNDING_STAGE,
+                "grounded": grounding.grounded,
+                "risk_score": grounding.risk_score,
+                "reasons": grounding.reasons,
+            },
+        )
+        risk_eval = score_postllm_risk(
+            base_risk=out_decision.risk_score,
+            model_output=output_text,
+            grounding_risk=grounding.risk_score,
+            blocked=out_decision.blocked,
+        )
+        final_risk = risk_eval.final_risk
+        _log(
+            {
+                "stage": self.OUTPUT_FIREWALL_RISK_STAGE,
+                "base_risk": out_decision.risk_score,
+                "added_risk": risk_eval.added_risk,
+                "final_risk": final_risk,
+                "reasons": risk_eval.reasons,
+            },
+        )
+        if risk_eval.require_approval and not out_decision.blocked:
+            out_decision.require_approval = True
+            if not out_decision.message:
+                out_decision.message = "Post-LLM risk threshold exceeded: approval required"
+
+        audit_evidence = build_audit_evidence(
+            session_id=session_id,
+            request_id=request_id,
+            stage=self.OUTPUT_FIREWALL_STAGE,
+            risk_score=final_risk,
+            reasons=list(dict.fromkeys(grounding.reasons + risk_eval.reasons)),
+            details={"decision": out_decision.to_dict()},
+        )
+        _log({"stage": self.OUTPUT_FIREWALL_AUDIT_STAGE, "evidence": audit_evidence})
+
         if out_decision.blocked:
             self._update_and_persist_risk_state(
                 session_id,
                 risk_state,
-                out_decision.risk_score,
+                final_risk,
                 injection_signal=False,
                 tool_misuse_signal=False,
                 goal_drift_signal=True,
@@ -349,19 +457,19 @@ class GuardedRuntime:
                 "blocked": True,
                 "require_approval": False,
                 "message": out_decision.message or "Blocked",
-                "risk_score": out_decision.risk_score,
+                "risk_score": final_risk,
                 "approval_hash": None,
                 "sanitized_output": None,
             }
 
         if out_decision.require_approval:
-            h = approval_hash(stage="postllm", content=output_text, context=context)
+            h = approval_hash(stage=self.OUTPUT_FIREWALL_STAGE, content=output_text, context=context)
             if not self.store.is_approved(session_id, h):
                 self.store.add_pending_approval(session_id, h)
                 self._update_and_persist_risk_state(
                     session_id,
                     risk_state,
-                    out_decision.risk_score,
+                    final_risk,
                     injection_signal=False,
                     tool_misuse_signal=False,
                     goal_drift_signal=False,
@@ -371,7 +479,7 @@ class GuardedRuntime:
                     "blocked": False,
                     "require_approval": True,
                     "message": out_decision.message or "Approval required",
-                    "risk_score": out_decision.risk_score,
+                    "risk_score": final_risk,
                     "approval_hash": h,
                     "sanitized_output": None,
                 }
@@ -380,26 +488,34 @@ class GuardedRuntime:
         if sanitized != output_text:
             _log(
                 {
-                    "stage": "postllm.transform",
+                    "stage": self.OUTPUT_FIREWALL_TRANSFORM_STAGE,
                     "output_original": output_text,
                     "output_transformed": sanitized,
                 },
             )
+        _log(
+            {
+                "stage": self.POSTLLM_RESPONSE_STAGE,
+                "output": sanitized,
+                "kind": "allow",
+                "reason": out_decision.message,
+            },
+        )
         updated = self._update_and_persist_risk_state(
             session_id,
             risk_state,
-            out_decision.risk_score,
+            final_risk,
             injection_signal=False,
             tool_misuse_signal=False,
             goal_drift_signal=False,
         )
-        _log({"stage": "risk.update", "final_risk": out_decision.risk_score, "risk_state": updated})
+        _log({"stage": "risk.update", "final_risk": final_risk, "risk_state": updated})
         return {
             "allowed": True,
             "blocked": False,
             "require_approval": False,
             "message": out_decision.message,
-            "risk_score": out_decision.risk_score,
+            "risk_score": final_risk,
             "approval_hash": None,
             "sanitized_output": sanitized,
         }
@@ -546,8 +662,10 @@ class GuardedRuntime:
                     tool_misuse_signal=False,
                     goal_drift_signal=True,
                 )
+                refusal = self._policy_block_message(net_decision.message, normalized)
+                _log({"stage": self.POSTLLM_RESPONSE_STAGE, "output": refusal, "kind": "block", "reason": net_decision.message})
                 return RuntimeResult(
-                    output=net_decision.message or "Blocked",
+                    output=refusal,
                     actions=["block"],
                     risk_score=net_decision.risk_score,
                     message=net_decision.message,
@@ -577,8 +695,10 @@ class GuardedRuntime:
                 tool_misuse_signal=False,
                 goal_drift_signal=True,
             )
+            refusal = self._policy_block_message(decision.message, normalized)
+            _log({"stage": self.POSTLLM_RESPONSE_STAGE, "output": refusal, "kind": "block", "reason": decision.message})
             return RuntimeResult(
-                output=decision.message or "Blocked",
+                output=refusal,
                 actions=["block"],
                 risk_score=decision.risk_score,
                 message=decision.message,
@@ -597,8 +717,10 @@ class GuardedRuntime:
                     tool_misuse_signal=False,
                     goal_drift_signal=False,
                 )
+                refusal = self._policy_block_message(decision.message or "Approval required", normalized)
+                _log({"stage": self.POSTLLM_RESPONSE_STAGE, "output": refusal, "kind": "approval", "reason": decision.message})
                 return RuntimeResult(
-                    output=decision.message or "Approval required",
+                    output=refusal,
                     actions=["require_approval"],
                     risk_score=decision.risk_score,
                     message=decision.message,
@@ -622,8 +744,10 @@ class GuardedRuntime:
 
         # 4) model response
         try:
-            model_output = self._build_model_output(transformed_input)
-            _log({"stage": "model", "input": transformed_input, "output": model_output})
+            model_hint = dict(context)
+            model_hint["policy_risk_score"] = pre_risk
+            model_output, model_meta = self._build_model_output(transformed_input, route_hint=model_hint)
+            _log({"stage": "model", "input": transformed_input, "output": model_output, "model_route": model_meta})
         except Exception as exc:
             _log({"stage": "model.error", "input": transformed_input, "error": str(exc)})
             if settings.aegis_fail_closed:
@@ -650,13 +774,43 @@ class GuardedRuntime:
         out_decision = self.policy_engine.evaluate(model_output, stage="postllm", detectors=self.detectors, context=context)
         _log(
             {
-                "stage": "postllm",
+                "stage": self.OUTPUT_FIREWALL_STAGE,
                 "content": model_output,
                 "decision": out_decision.to_dict(),
             },
         )
 
         combined_risk = pre_risk + out_decision.risk_score
+        grounding = assess_grounding(model_output, context=context)
+        _log(
+            {
+                "stage": self.OUTPUT_FIREWALL_GROUNDING_STAGE,
+                "grounded": grounding.grounded,
+                "risk_score": grounding.risk_score,
+                "reasons": grounding.reasons,
+            },
+        )
+        risk_eval = score_postllm_risk(
+            base_risk=combined_risk,
+            model_output=model_output,
+            grounding_risk=grounding.risk_score,
+            blocked=out_decision.blocked,
+        )
+        combined_risk = risk_eval.final_risk
+        _log(
+            {
+                "stage": self.OUTPUT_FIREWALL_RISK_STAGE,
+                "base_risk": pre_risk + out_decision.risk_score,
+                "added_risk": risk_eval.added_risk,
+                "final_risk": combined_risk,
+                "reasons": risk_eval.reasons,
+            },
+        )
+        if risk_eval.require_approval and not out_decision.blocked:
+            out_decision.require_approval = True
+            if not out_decision.message:
+                out_decision.message = "Post-LLM risk threshold exceeded: approval required"
+
         combined_message = out_decision.message or pre_message
         pre_sev = self._decision_severity(decision)
         post_sev = self._decision_severity(out_decision)
@@ -687,8 +841,21 @@ class GuardedRuntime:
                     out_decision.message = "Consistency anomaly: approval required"
             combined_message = out_decision.message or pre_message
 
+        audit_evidence = build_audit_evidence(
+            session_id=session_id,
+            request_id=request_id,
+            stage=self.OUTPUT_FIREWALL_STAGE,
+            risk_score=combined_risk,
+            reasons=list(dict.fromkeys(grounding.reasons + risk_eval.reasons)),
+            details={
+                "prellm_decision": decision.to_dict(),
+                "postllm_decision": out_decision.to_dict(),
+            },
+        )
+        _log({"stage": self.OUTPUT_FIREWALL_AUDIT_STAGE, "evidence": audit_evidence})
+
         if out_decision.require_approval:
-            h = approval_hash(stage="postllm", content=model_output, context=context)
+            h = approval_hash(stage=self.OUTPUT_FIREWALL_STAGE, content=model_output, context=context)
             if not self.store.is_approved(session_id, h):
                 self.store.add_pending_approval(session_id, h)
                 combined_actions = list(dict.fromkeys(pre_actions + ["require_approval"]))
@@ -700,8 +867,10 @@ class GuardedRuntime:
                     tool_misuse_signal=False,
                     goal_drift_signal=False,
                 )
+                refusal = self._policy_block_message(out_decision.message or "Approval required", normalized)
+                _log({"stage": self.POSTLLM_RESPONSE_STAGE, "output": refusal, "kind": "approval", "reason": out_decision.message})
                 return RuntimeResult(
-                    output=out_decision.message or "Approval required",
+                    output=refusal,
                     actions=combined_actions,
                     risk_score=combined_risk,
                     message=combined_message,
@@ -717,8 +886,10 @@ class GuardedRuntime:
                 tool_misuse_signal=False,
                 goal_drift_signal=True,
             )
+            refusal = self._policy_block_message(out_decision.message, normalized)
+            _log({"stage": self.POSTLLM_RESPONSE_STAGE, "output": refusal, "kind": "block", "reason": out_decision.message})
             return RuntimeResult(
-                output=out_decision.message or "Blocked",
+                output=refusal,
                 actions=["block"],
                 risk_score=combined_risk,
                 message=combined_message,
@@ -730,13 +901,19 @@ class GuardedRuntime:
         if output != model_output:
             _log(
                 {
-                    "stage": "postllm.transform",
+                    "stage": self.OUTPUT_FIREWALL_TRANSFORM_STAGE,
                     "output_original": model_output,
                     "output_transformed": output,
                 },
             )
 
         actions = list(dict.fromkeys(pre_actions + out_decision.actions()))
+        if "warn" in actions:
+            warning_text = self._policy_warning_message(combined_message, normalized)
+            output = f"{warning_text}\n\n{output}".strip()
+            _log({"stage": self.POSTLLM_RESPONSE_STAGE, "output": warning_text, "kind": "warn", "reason": combined_message})
+        else:
+            _log({"stage": self.POSTLLM_RESPONSE_STAGE, "output": output, "kind": "allow", "reason": combined_message})
         llm_flags = context.get("llm_classification") or {}
         updated = self._update_and_persist_risk_state(
             session_id,
@@ -801,6 +978,49 @@ class GuardedRuntime:
                 "sanitized_payload": None,
             }
 
+        least_privilege = enforce_least_privilege(tool_name, payload, role, environment)
+        _log(
+            {
+                "stage": "tool_least_privilege",
+                "tool": tool_name,
+                "allowed": least_privilege.allowed,
+                "require_approval": least_privilege.require_approval,
+                "message": least_privilege.message,
+            },
+        )
+        if not least_privilege.allowed:
+            if least_privilege.require_approval:
+                h = approval_hash(stage="tool_least_privilege", content=f"{tool_name}:{payload}", context=context)
+                if not self.store.is_approved(session_id, h):
+                    self.store.add_pending_approval(session_id, h)
+                    return {
+                        "allowed": False,
+                        "blocked": False,
+                        "require_approval": True,
+                        "message": least_privilege.message,
+                        "risk_score": 0.6,
+                        "approval_hash": h,
+                        "sanitized_payload": None,
+                    }
+            else:
+                self._update_and_persist_risk_state(
+                    session_id,
+                    risk_state,
+                    0.6,
+                    injection_signal=False,
+                    tool_misuse_signal=is_sensitive_tool(tool_name),
+                    goal_drift_signal=False,
+                )
+                return {
+                    "allowed": False,
+                    "blocked": True,
+                    "require_approval": False,
+                    "message": least_privilege.message,
+                    "risk_score": 0.6,
+                    "approval_hash": None,
+                    "sanitized_payload": None,
+                }
+
         pre_decision = self.policy_engine.evaluate(
             text=f"{tool_name}:{payload}",
             stage="tool_pre",
@@ -834,7 +1054,7 @@ class GuardedRuntime:
                 "sanitized_payload": None,
             }
 
-        safe_payload = payload
+        safe_payload = least_privilege.sanitized_payload
         transformed_payload = False
         if pre_decision.redact:
             safe_payload = self._mask_strings(safe_payload, pre_decision.redaction or "[REDACTED]")
@@ -1100,6 +1320,42 @@ class GuardedRuntime:
             )
             return {"allowed": False, "message": "Tool blocked: session is quarantined", "result": None}
 
+        least_privilege = enforce_least_privilege(tool_name, payload, role, environment)
+        _log(
+            {
+                "stage": "tool_least_privilege",
+                "tool": tool_name,
+                "allowed": least_privilege.allowed,
+                "require_approval": least_privilege.require_approval,
+                "message": least_privilege.message,
+            },
+        )
+        if not least_privilege.allowed:
+            if least_privilege.require_approval:
+                h = approval_hash(stage="tool_least_privilege", content=f"{tool_name}:{payload}", context=context)
+                if not self.store.is_approved(session_id, h):
+                    self.store.add_pending_approval(session_id, h)
+                    return {
+                        "allowed": False,
+                        "message": least_privilege.message,
+                        "result": None,
+                        "approval_hash": h,
+                    }
+            else:
+                self._update_and_persist_risk_state(
+                    session_id,
+                    risk_state,
+                    0.6,
+                    injection_signal=False,
+                    tool_misuse_signal=is_sensitive_tool(tool_name),
+                    goal_drift_signal=False,
+                )
+                return {
+                    "allowed": False,
+                    "message": least_privilege.message,
+                    "result": None,
+                }
+
         pre_decision = self.policy_engine.evaluate(
             text=f"{tool_name}:{payload}",
             stage="tool_pre",
@@ -1129,7 +1385,7 @@ class GuardedRuntime:
                 "result": None,
             }
 
-        safe_payload = payload
+        safe_payload = least_privilege.sanitized_payload
         transformed_payload = False
         if pre_decision.redact:
             safe_payload = self._mask_strings(safe_payload, pre_decision.redaction or "[REDACTED]")

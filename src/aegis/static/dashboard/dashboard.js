@@ -1,11 +1,31 @@
 ﻿const apiBase = '/v1';
-          let currentSession = null;
+          const DEMO_USER_KEY = 'aegis_demo_user';
+          let demoUsers = [];
+          let selectedSessionId = null;
           let sessionList = [];
+          let groupedUsers = [];
+          let promptSessionId = null;
           let requestGroups = [];
           let selectedRequestId = null;
           let autoRefreshTimer = null;
 
-          function getKey() { return localStorage.getItem('aegis_api_key') || ''; }
+          function setPage(page) {
+            const pages = ['sessions', 'traces', 'playground', 'analytics'];
+            pages.forEach(name => {
+              const p = document.getElementById(`page-${name}`);
+              const t = document.getElementById(`tab-${name}`);
+              if (p) p.classList.toggle('active', name === page);
+              if (t) t.classList.toggle('active', name === page);
+            });
+          }
+
+          function getDemoUser() { return (localStorage.getItem(DEMO_USER_KEY) || '').trim().toLowerCase(); }
+          function setActiveUserLabel() {
+            const el = document.getElementById('activeUser');
+            if (!el) return;
+            const user = getDemoUser();
+            el.textContent = user ? `User: ${user}` : 'User: not selected';
+          }
           function setStatus(ok, msg) {
             const el = document.getElementById('status');
             el.textContent = msg || (ok ? 'Connected' : 'Disconnected');
@@ -13,15 +33,119 @@
             el.style.background = ok ? '#d1fae5' : '#fee2e2';
             el.style.borderColor = ok ? '#86efac' : '#fca5a5';
           }
-          function saveKey() {
-            localStorage.setItem('aegis_api_key', (document.getElementById('apiKey').value || '').trim());
-            refreshAll();
+          function logoutDemoUser() {
+            localStorage.removeItem(DEMO_USER_KEY);
+            setActiveUserLabel();
+            stopAutoRefresh();
+            showIdentityGate();
           }
           async function api(path, options = {}) {
-            const headers = Object.assign({}, options.headers || {}, {'x-api-key': getKey()});
+            const headers = Object.assign({}, options.headers || {});
+            const demoUser = getDemoUser();
+            if (demoUser) headers['x-demo-user'] = demoUser;
             const res = await fetch(apiBase + path, { ...options, headers });
             if (!res.ok) throw new Error('API ' + res.status);
             return res.json();
+          }
+          async function loadDemoUsers() {
+            try {
+              const data = await api('/demo/users');
+              demoUsers = Array.isArray(data.users) ? data.users : [];
+            } catch {
+              demoUsers = [
+                { username: 'kanyo', role: 'employee' },
+                { username: 'krimo', role: 'employee' },
+                { username: 'nova', role: 'employee' },
+                { username: 'admin', role: 'admin' },
+              ];
+            }
+            return demoUsers;
+          }
+          function populateIdentityOptions() {
+            const list = document.getElementById('identityUsers');
+            if (!list) return;
+            list.innerHTML = '';
+            demoUsers.forEach(u => {
+              const opt = document.createElement('option');
+              opt.value = String(u.username || '').toLowerCase();
+              list.appendChild(opt);
+            });
+          }
+          async function showIdentityGate() {
+            const gate = document.getElementById('identityGate');
+            if (gate) gate.classList.remove('hidden');
+            const err = document.getElementById('identityError');
+            if (err) err.textContent = '';
+            await loadDemoUsers();
+            populateIdentityOptions();
+          }
+          function hideIdentityGate() {
+            const gate = document.getElementById('identityGate');
+            if (gate) gate.classList.add('hidden');
+          }
+          function roleForUser(username) {
+            const u = demoUsers.find(x => String(x.username || '').toLowerCase() === String(username || '').toLowerCase());
+            return String(u?.role || 'employee').toLowerCase();
+          }
+          function displayUser(username) {
+            const raw = String(username || '').trim().toLowerCase();
+            return raw ? raw : 'anonymous';
+          }
+          function buildGroupedUsers() {
+            groupedUsers = (sessionList || []).map(s => {
+              const username = displayUser(s.username);
+              return {
+                id: String(s.id || ''),
+                username,
+                label: String(s.title || 'New Chat'),
+                events: Number(s.events || 0),
+                timestamp: Number(s.timestamp || 0),
+                timestampReadable: String(s.timestamp_readable || '-'),
+              };
+            }).sort((a, b) => {
+              if (b.timestamp !== a.timestamp) return b.timestamp - a.timestamp;
+              if (b.events !== a.events) return b.events - a.events;
+              return a.id.localeCompare(b.id);
+            });
+          }
+          async function continueAsUser() {
+            const input = document.getElementById('identityInput');
+            const err = document.getElementById('identityError');
+            const chosen = (input?.value || '').trim().toLowerCase();
+            if (!chosen) {
+              if (err) err.textContent = 'Please choose a user.';
+              return;
+            }
+            if (!demoUsers.find(u => String(u.username || '').toLowerCase() === chosen)) {
+              if (err) err.textContent = 'Unknown user. Use: kanyo, krimo, nova, or admin.';
+              return;
+            }
+            localStorage.setItem(DEMO_USER_KEY, chosen);
+            setActiveUserLabel();
+            const role = roleForUser(chosen);
+            if (role !== 'admin') {
+              window.location.href = '/v1/dashboard/chat';
+              return;
+            }
+            hideIdentityGate();
+            await refreshAll();
+          }
+          async function initIdentityFlow() {
+            setActiveUserLabel();
+            await loadDemoUsers();
+            const user = getDemoUser();
+            const role = roleForUser(user);
+            if (!user || !role) {
+              localStorage.removeItem(DEMO_USER_KEY);
+              await showIdentityGate();
+              return false;
+            }
+            if (role !== 'admin') {
+              window.location.href = '/v1/dashboard/chat';
+              return false;
+            }
+            hideIdentityGate();
+            return true;
           }
           function outcomeOfDecision(decision) {
             const d = decision || {};
@@ -31,6 +155,11 @@
             return 'allow';
           }
           function summarizeEvent(e) {
+            if (e.stage === 'postllm.response' || e.stage === 'guardrail.response') {
+              const k = String(e.kind || '').toUpperCase() || 'POLICY';
+              const msg = String(e.output || e.reason || '').trim();
+              return msg ? `${k}: ${msg}` : `${k}: policy response generated`;
+            }
             if (e.stage === 'llm_classification') {
               const cls = e.classification || {};
               const flags = Object.keys(cls).filter(k => !k.startsWith('__') && cls[k] === true);
@@ -47,8 +176,17 @@
               return m ? `${o}: ${m}` : o;
             }
             if ((e.stage || '').endsWith('.transform')) return 'Content transformed by guardrail';
-            if (e.stage === 'model') return 'Model produced candidate response';
+            if (e.stage === 'model') {
+              const route = (e.model_route || {}).route || 'single';
+              const model = (e.model_route || {}).model || 'unknown';
+              return `Model produced candidate response (${route}, ${model})`;
+            }
             return e.stage || 'event';
+          }
+          function modelRouteOf(group) {
+            if (!group) return 'single';
+            const ev = (group.events || []).find(e => e.stage === 'model');
+            return String((ev?.model_route || {}).route || 'single').toLowerCase();
           }
           function inferOutcome(events) {
             let out = 'allow';
@@ -109,21 +247,133 @@
             if (s === 'warn') return '<span class="pill warn">WARN</span>';
             return '<span class="pill ok">ALLOW</span>';
           }
+          function routeBadge(route) {
+            const r = String(route || 'single').toLowerCase();
+            if (r === 'private') return '<span class="pill route-private">PRIVATE LLM</span>';
+            if (r === 'public') return '<span class="pill route-public">PUBLIC LLM</span>';
+            if (r === 'disabled') return '<span class="pill route-disabled">MODEL OFF</span>';
+            return '<span class="pill route-single">SINGLE LLM</span>';
+          }
           function renderSessions() {
             const q = (document.getElementById('sessionSearch').value || '').toLowerCase();
-            const list = sessionList.filter(s => !q || (s.id || '').toLowerCase().includes(q));
+            const list = groupedUsers.filter(u => !q || u.label.toLowerCase().includes(q) || u.username.includes(q) || u.id.toLowerCase().includes(q));
             const el = document.getElementById('sessions');
             el.innerHTML = '';
             if (!list.length) {
               el.innerHTML = '<div class="tiny">No sessions</div>';
               return;
             }
-            list.forEach(s => {
+            list.forEach(u => {
               const d = document.createElement('div');
-              d.className = 'session' + (s.id === currentSession ? ' active' : '');
-              d.innerHTML = `<div>${s.id}</div><div class="tiny">${s.events} events</div>`;
-              d.onclick = () => selectSession(s.id);
+              d.className = 'session' + (u.id === selectedSessionId ? ' active' : '');
+              const shortId = u.id.length > 12 ? `${u.id.slice(0, 12)}…` : u.id;
+              d.innerHTML = `<div>${u.label}</div><div class="tiny">${u.username} • ${u.events} events • ${u.timestampReadable} • ${shortId}</div>`;
+              d.onclick = () => selectUser(u.id);
               el.appendChild(d);
+            });
+          }
+          function extractSessionChats(events) {
+            const policyBlockFallback = (reason) => {
+              const base = "I can't answer that request because it goes against policy. I can help with a safer alternative, like high-level guidance, defensive best practices, or a compliant version of your question.";
+              const detail = String(reason || '').trim();
+              return detail ? `${base} Reason: ${detail}` : base;
+            };
+
+            const policyWarnFallback = (reason) => {
+              const base = "Policy warning: this request may violate policy, so the response is limited. If you want, rephrase toward safe intent and I can provide a compliant alternative.";
+              const detail = String(reason || '').trim();
+              return detail ? `${base} Reason: ${detail}` : base;
+            };
+
+            const grouped = {};
+            events.forEach((e, idx) => {
+              const id = e.request_id || `legacy-${idx}`;
+              if (!grouped[id]) grouped[id] = { id, ts: Number(e.ts || 0), user: '', assistant: '', events: [] };
+              grouped[id].ts = Math.max(grouped[id].ts, Number(e.ts || 0));
+              grouped[id].events.push(e);
+              if (!grouped[id].user && e.stage === 'prellm' && e.content) grouped[id].user = String(e.content);
+              if (e.stage === 'model' && e.output) grouped[id].assistant = String(e.output);
+              if ((e.stage === 'output_firewall.transform' || e.stage === 'postllm.transform') && e.output_transformed) grouped[id].assistant = String(e.output_transformed);
+              if ((e.stage === 'postllm.response' || e.stage === 'guardrail.response') && e.output && !grouped[id].assistant) grouped[id].assistant = String(e.output);
+            });
+            return Object.values(grouped)
+              .map(x => {
+                const outcome = inferOutcome(x.events || []);
+                const decisionEvent = (x.events || []).find(ev => {
+                  const d = ev.decision || {};
+                  return Boolean(d.blocked || d.warn || d.require_approval);
+                }) || null;
+                const decisionMessage = String((decisionEvent?.decision || {}).message || decisionEvent?.message || '').trim();
+                let guardrailMessage = '';
+                if (outcome === 'block') {
+                  guardrailMessage = policyBlockFallback(decisionMessage);
+                } else if (outcome === 'approval') {
+                  guardrailMessage = policyBlockFallback(decisionMessage || 'This request requires policy approval.');
+                } else if (outcome === 'warn') {
+                  guardrailMessage = policyWarnFallback(decisionMessage);
+                }
+                return {
+                  id: x.id,
+                  ts: x.ts,
+                  user: x.user,
+                  assistant: x.assistant,
+                  outcome,
+                  decisionMessage,
+                  guardrailMessage,
+                };
+              })
+              .filter(x => x.user || x.assistant || x.outcome === 'block')
+              .sort((a, b) => b.ts - a.ts);
+          }
+          function renderSessionChats(events) {
+            const el = document.getElementById('sessionChats');
+            if (!el) return;
+            const chats = extractSessionChats(events || []);
+            el.innerHTML = '';
+            if (!chats.length) {
+              el.innerHTML = '<div class="tiny">No chat messages yet for this session.</div>';
+              return;
+            }
+            chats.forEach(c => {
+              if (c.user) {
+                const box = document.createElement('div');
+                box.className = 'chat-item user';
+                const role = document.createElement('div');
+                role.className = 'chat-role';
+                role.textContent = 'User';
+                const text = document.createElement('div');
+                text.className = 'chat-text';
+                text.textContent = c.user;
+                box.appendChild(role);
+                box.appendChild(text);
+                el.appendChild(box);
+              }
+              if (c.assistant) {
+                const box = document.createElement('div');
+                box.className = 'chat-item assistant';
+                const role = document.createElement('div');
+                role.className = 'chat-role';
+                role.textContent = 'Assistant';
+                const text = document.createElement('div');
+                text.className = 'chat-text';
+                text.textContent = c.assistant;
+                box.appendChild(role);
+                box.appendChild(text);
+                el.appendChild(box);
+              }
+              if (!c.assistant && (c.outcome === 'block' || c.outcome === 'approval' || c.outcome === 'warn')) {
+                const box = document.createElement('div');
+                box.className = 'chat-item assistant';
+                const role = document.createElement('div');
+                role.className = 'chat-role';
+                role.textContent = 'Assistant';
+                const text = document.createElement('div');
+                text.className = 'chat-text';
+                text.textContent = c.guardrailMessage || c.decisionMessage || 'Message blocked by policy.';
+                box.appendChild(role);
+                box.appendChild(text);
+                el.appendChild(box);
+              }
             });
           }
           function renderMix(groups) {
@@ -165,11 +415,16 @@
             }
             const local = group.events.find(e => e.stage === 'local_classification');
             const pre = group.events.find(e => e.stage === 'prellm');
-            const post = group.events.find(e => e.stage === 'postllm');
+            const post = group.events.find(e => e.stage === 'output_firewall' || e.stage === 'postllm');
+            const model = group.events.find(e => e.stage === 'model');
+            const route = String((model?.model_route || {}).route || 'single').toLowerCase();
+            const routeModel = (model?.model_route || {}).model || '';
+            const anonymized = Boolean((model?.model_route || {}).anonymized);
             const parts = [];
             if (local?.classification) parts.push(`Local: ${local.classification.label || 'ALLOW'} (${Number(local.classification.confidence || 0).toFixed(2)})`);
             if (pre?.decision) parts.push(`Pre-LLM: ${outcomeOfDecision(pre.decision).toUpperCase()}`);
             if (post?.decision) parts.push(`Post-LLM: ${outcomeOfDecision(post.decision).toUpperCase()}`);
+            if (model) parts.push(`Route: ${route}${routeModel ? ` (${routeModel})` : ''}${anonymized ? ' [anonymized]' : ''}`);
             el.textContent = parts.join(' | ') || 'No classifier metadata.';
           }
           function renderTrace(group) {
@@ -185,7 +440,11 @@
             group.events.forEach((e, idx) => {
               const d = document.createElement('div');
               d.className = 'stage';
-              const state = e.decision ? outcomeOfDecision(e.decision) : 'allow';
+              const state = e.decision
+                ? outcomeOfDecision(e.decision)
+                : (((e.stage === 'postllm.response' || e.stage === 'guardrail.response') && ['block', 'warn', 'approval'].includes(String(e.kind || '').toLowerCase()))
+                    ? String(e.kind || '').toLowerCase()
+                    : 'allow');
               d.innerHTML = `
                 <div class="inline" style="justify-content:space-between">
                   <div class="inline"><strong>${e.stage || 'event'}</strong>${badge(state)}</div>
@@ -218,10 +477,11 @@
             groups.forEach(g => {
               const d = document.createElement('div');
               d.className = 'request' + (g.id === selectedRequestId ? ' active' : '');
+              const route = modelRouteOf(g);
               d.innerHTML = `
                 <div class="inline" style="justify-content:space-between">
                   <strong>${g.flow.toUpperCase()} trace</strong>
-                  ${badge(g.outcome)}
+                  <div class="inline">${routeBadge(route)}${badge(g.outcome)}</div>
                 </div>
                 <div class="tiny">risk ${g.risk.toFixed(2)} | ${g.events.length} stages</div>
                 <div style="margin-top:4px">${g.input || '[no content]'}</div>
@@ -242,33 +502,49 @@
             try {
               const data = await api('/sessions');
               sessionList = data.sessions || [];
+              buildGroupedUsers();
+              if (!selectedSessionId && groupedUsers.length) {
+                selectedSessionId = groupedUsers[0].id;
+                document.getElementById('sessionId').textContent = selectedSessionId;
+                await loadSessionDetail();
+              }
               setStatus(true);
             } catch {
               sessionList = [];
+              groupedUsers = [];
               setStatus(false, 'Invalid key');
             }
             renderSessions();
           }
-          async function selectSession(id) {
-            currentSession = id;
-            document.getElementById('sessionId').textContent = id;
+          async function selectUser(username) {
+            selectedSessionId = username;
+            document.getElementById('sessionId').textContent = username;
             await loadSessionDetail();
             renderSessions();
           }
           async function ensureSession() {
-            if (currentSession) return currentSession;
+            if (promptSessionId) return promptSessionId;
             const created = await api('/sessions', { method: 'POST' });
-            currentSession = created.session_id;
-            document.getElementById('sessionId').textContent = currentSession;
+            promptSessionId = created.session_id;
             await loadSessions();
-            return currentSession;
+            return promptSessionId;
           }
           async function loadSessionDetail() {
-            if (!currentSession) return;
+            if (!selectedSessionId) return;
             try {
-              const data = await api(`/sessions/${currentSession}`);
-              requestGroups = groupRequests(data.events || []);
+              if (!sessionList.find(s => String(s.id) === String(selectedSessionId))) {
+                requestGroups = [];
+                renderRequests();
+                renderSessionChats([]);
+                document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+                return;
+              }
+              const payload = await api(`/sessions/${selectedSessionId}`);
+              const merged = [...(payload.events || [])];
+              merged.sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0));
+              requestGroups = groupRequests(merged);
               renderRequests();
+              renderSessionChats(merged);
               document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
             } catch {
               setStatus(false, 'Fetch error');
@@ -276,7 +552,7 @@
           }
           async function refreshAll() {
             await loadSessions();
-            if (currentSession) await loadSessionDetail();
+            if (selectedSessionId) await loadSessionDetail();
           }
           function seedPayload(kind) {
             const box = document.getElementById('testMessage');
@@ -348,10 +624,18 @@
             if (document.getElementById('autoRefresh').checked) startAutoRefresh();
             else stopAutoRefresh();
           }
-          document.getElementById('apiKey').value = getKey();
-          refreshAll();
-          startAutoRefresh();
+          async function boot() {
+            setPage('sessions');
+            const ok = await initIdentityFlow();
+            if (!ok) return;
+            await refreshAll();
+            startAutoRefresh();
+          }
+          boot();
+          window.setPage = setPage;
           window.toggleRaw = toggleRaw;
           window.sendTestMessage = sendTestMessage;
           window.sendToolTest = sendToolTest;
           window.seedPayload = seedPayload;
+          window.continueAsUser = continueAsUser;
+          window.logoutDemoUser = logoutDemoUser;

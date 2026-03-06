@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aegis Chat</title>
+    <link rel="stylesheet" href="/static/dashboard/dashboard.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo"></div>
+        <strong>Aegis Employee Chat</strong>
+      </div>
+      <div class="inline">
+        <span id="chatUser" class="status">User: -</span>
+        <span id="chatStatus" class="status">Disconnected</span>
+        <button class="btn" onclick="logoutDemoUser()">Switch User</button>
+      </div>
+    </header>
+
+    <div class="shell">
+      <main class="workspace">
+        <section class="panel">
+          <div class="inline" style="margin-bottom:8px">
+            <select id="chatSessionSelect" class="select" style="min-width:300px" onchange="switchSession(this.value)"></select>
+            <button class="btn" onclick="createNewSession()">New Session</button>
+          </div>
+          <div class="title">Prompt</div>
+          <textarea id="chatPrompt" class="textarea" placeholder="Type your prompt here..."></textarea>
+          <div style="height:8px"></div>
+          <div class="inline">
+            <button id="chatSendBtn" class="btn primary" onclick="sendChatPrompt()">Send</button>
+            <span id="chatState" class="tiny">idle</span>
+          </div>
+          <div class="title">Response</div>
+          <div id="chatResponse" class="chat-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/dashboard/chat.js"></script>
+  </body>
+</html>

@@ -49,6 +49,7 @@ class Settings:
         self.aegis_guardrail_profile = (_get("AEGIS_GUARDRAIL_PROFILE", "balanced") or "balanced").strip().lower()
         self.database_url = _get("DATABASE_URL", "sqlite:///aegis.db")
         self.aegis_api_key = _get("AEGIS_API_KEY", "changeme")
+        self.aegis_api_key_required = _get_bool("AEGIS_API_KEY_REQUIRED", False)
         self.aegis_fail_closed = _get_bool("AEGIS_FAIL_CLOSED", False)
         self.aegis_strict_policy_load = _get_bool("AEGIS_STRICT_POLICY_LOAD", True)
         self.policy_path = _get("POLICY_PATH", "config/policies.example.yaml")
@@ -64,6 +65,32 @@ class Settings:
         self.aegis_model_timeout = _get_int("AEGIS_MODEL_TIMEOUT", 30)
         self.aegis_model_name = _get("AEGIS_MODEL_NAME", self.aegis_llm_model)
         self.aegis_model_max_tokens = _get_int("AEGIS_MODEL_MAX_TOKENS", 500)
+        self.aegis_model_routing_mode = _get("AEGIS_MODEL_ROUTING_MODE", "single")
+        self.aegis_private_model_endpoint = _get("AEGIS_PRIVATE_MODEL_ENDPOINT", self.aegis_model_endpoint)
+        self.aegis_private_model_name = _get("AEGIS_PRIVATE_MODEL_NAME", self.aegis_model_name)
+        self.aegis_private_model_timeout = _get_int("AEGIS_PRIVATE_MODEL_TIMEOUT", self.aegis_model_timeout)
+        self.aegis_public_model_endpoint = _get("AEGIS_PUBLIC_MODEL_ENDPOINT", self.aegis_model_endpoint)
+        self.aegis_public_model_name = _get("AEGIS_PUBLIC_MODEL_NAME", self.aegis_model_name)
+        self.aegis_public_model_timeout = _get_int("AEGIS_PUBLIC_MODEL_TIMEOUT", self.aegis_model_timeout)
+        self.aegis_public_anonymize_enabled = _get_bool("AEGIS_PUBLIC_ANONYMIZE_ENABLED", True)
+        self.aegis_private_labels = _get_list("AEGIS_PRIVATE_LABELS", ["CONFIDENTIAL", "PRIVATE", "PII", "SECRETS"])
+        self.aegis_private_risk_threshold = _get_float("AEGIS_PRIVATE_RISK_THRESHOLD", 0.35)
+        self.aegis_private_company_domains = _get_list("AEGIS_PRIVATE_COMPANY_DOMAINS", [])
+        self.aegis_private_keywords = _get_list(
+            "AEGIS_PRIVATE_KEYWORDS",
+            [
+                "internal only",
+                "confidential",
+                "proprietary",
+                "board deck",
+                "roadmap",
+                "customer list",
+                "employee data",
+                "source code",
+                "incident report",
+            ],
+        )
+        self.aegis_private_min_score = _get_float("AEGIS_PRIVATE_MIN_SCORE", 1.0)
         self.aegis_model_system_prompt = _get(
             "AEGIS_MODEL_SYSTEM_PROMPT",
             "You are a concise and safe assistant. Refuse harmful requests and prioritize secure behavior.",

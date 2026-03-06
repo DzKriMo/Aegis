@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, List
 import os
 import subprocess
 import json
+import shlex
 
 from .tools import guard_tool_call, guard_shell_command, guard_filesystem_path
 from ..prellm.network import evaluate_urls
@@ -38,14 +39,17 @@ def execute_tool(
 
     if tool_name == "shell":
         command = str(payload.get("command", ""))
-        if policy.allowlist and command.split(" ", 1)[0] not in policy.allowlist:
-            return ToolResult(False, "Command not allowlisted", None)
         cmd_decision = guard_shell_command(command)
         if not cmd_decision.allowed:
             return ToolResult(False, cmd_decision.message, None)
         # Safe execution: no shell, explicit timeout, capture output
         try:
-            args = command.strip().split(" ")
+            args = shlex.split(command.strip())
+            if not args:
+                return ToolResult(False, "Empty command", None)
+            executable = os.path.basename(args[0])
+            if policy.allowlist and executable not in policy.allowlist:
+                return ToolResult(False, "Command not allowlisted", None)
             completed = subprocess.run(
                 args,
                 capture_output=True,
@@ -63,6 +67,8 @@ def execute_tool(
 
     if tool_name == "filesystem_read":
         path = str(payload.get("path", ""))
+        if environment == "prod" and not filesystem_root:
+            return ToolResult(False, "filesystem_root is required in prod", None)
         if filesystem_root:
             fs_decision = guard_filesystem_path(path, filesystem_root)
             if not fs_decision.allowed:
@@ -79,6 +85,8 @@ def execute_tool(
     if tool_name == "http_fetch":
         url = str(payload.get("url", ""))
         method = str(payload.get("method", "GET")).upper()
+        if method not in {"GET", "HEAD"}:
+            return ToolResult(False, "HTTP method blocked by firewall", None)
         net_decision = evaluate_urls([url], allowlist=allowlist or [], denylist=denylist or [])
         if net_decision.blocked:
             return ToolResult(False, net_decision.message, None)

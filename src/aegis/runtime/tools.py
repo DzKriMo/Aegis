@@ -15,6 +15,7 @@ DANGEROUS_COMMANDS = {
     "format",
     "diskpart",
 }
+SHELL_META_CHARS = re.compile(r"[;&|`><\n\r]")
 
 @dataclass
 class ToolDecision:
@@ -45,7 +46,7 @@ def guard_tool_call(
     if allowlist and tool_name not in allowlist:
         return ToolDecision(False, "Tool not allowlisted")
 
-    if environment == "prod" and tool_name in {"shell", "filesystem"}:
+    if environment == "prod" and tool_name in {"shell"}:
         return ToolDecision(False, "Destructive tools blocked in prod")
 
     return ToolDecision(True)
@@ -53,6 +54,12 @@ def guard_tool_call(
 
 def guard_shell_command(command: str) -> ToolDecision:
     lower = command.strip().lower()
+    if not lower:
+        return ToolDecision(False, "Empty command blocked")
+    if len(lower) > 512:
+        return ToolDecision(False, "Command too long")
+    if SHELL_META_CHARS.search(lower):
+        return ToolDecision(False, "Shell metacharacters blocked")
     if any(re.search(r"\b" + re.escape(cmd) + r"\b", lower) for cmd in DANGEROUS_COMMANDS):
         return ToolDecision(False, "Dangerous command blocked")
     return ToolDecision(True)

@@ -1,26 +1,44 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from uuid import uuid4
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
+import re
+from datetime import datetime, timezone
 
 from ..auth.api_key import require_api_key
 from ..runtime.runner import GuardedRuntime
+from ..runtime.model_client import generate_text
 from ..storage.store import InMemoryStore
 from ..storage.db_store import DbStore
 from ..config import settings
 from ..policies.loader import save_policies
 from ..storage.registry import save_policies_to_db, save_tool_policies_to_db, load_tool_policies_from_db
 from ..runtime.tool_registry import get_all_tool_policies
+from ..storage.db import get_session as get_db_session, init_db
+from ..storage.models import UserRecord
 
 router = APIRouter()
 
 store = DbStore() if settings.aegis_db_enabled else InMemoryStore()
 runtime = GuardedRuntime(store=store)
 
+DEFAULT_DEMO_USERS: Dict[str, str] = {
+    "kanyo": "employee",
+    "krimo": "employee",
+    "nova": "employee",
+    "admin": "admin",
+}
+
 class CreateSessionResponse(BaseModel):
     session_id: str
+    username: Optional[str] = None
+    title: Optional[str] = None
+
+
+class CreateSessionRequest(BaseModel):
+    username: Optional[str] = None
 
 class MessageRequest(BaseModel):
     content: str
@@ -167,24 +185,140 @@ def _latest_benchmark_payload() -> Dict[str, Any]:
             continue
     return {}
 
+
+def _seed_default_demo_users() -> Dict[str, str]:
+    if not settings.aegis_db_enabled:
+        return dict(DEFAULT_DEMO_USERS)
+    init_db()
+    s = get_db_session()
+    if s is None:
+        return dict(DEFAULT_DEMO_USERS)
+    try:
+        existing = {str(u.username).lower(): u for u in s.query(UserRecord).all()}
+        changed = False
+        for username, role in DEFAULT_DEMO_USERS.items():
+            row = existing.get(username)
+            if row is None:
+                s.add(UserRecord(username=username, display_name=username, role=role, active=True))
+                changed = True
+            else:
+                if row.role != role:
+                    row.role = role
+                    changed = True
+                if not row.active:
+                    row.active = True
+                    changed = True
+        if changed:
+            s.commit()
+        rows = s.query(UserRecord).filter_by(active=True).all()
+        return {str(r.username).lower(): str(r.role or "employee").lower() for r in rows}
+    finally:
+        s.close()
+
+
+def _resolve_demo_identity(request: Request) -> tuple[str, str]:
+    users = _seed_default_demo_users()
+    raw = (request.headers.get("x-demo-user") or "").strip().lower()
+    if not raw:
+        return "admin", "admin"
+    role = users.get(raw)
+    if role is None:
+        raise HTTPException(status_code=403, detail="Unknown demo user")
+    return raw, role
+
+
+def _require_admin(request: Request) -> tuple[str, str]:
+    username, role = _resolve_demo_identity(request)
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return username, role
+
+
+def _check_session_access(request: Request, session_id: str) -> tuple[str, str]:
+    username, role = _resolve_demo_identity(request)
+    if role == "admin":
+        return username, role
+    owner_getter = getattr(store, "get_session_username", None)
+    owner = owner_getter(session_id) if callable(owner_getter) else None
+    if not owner or str(owner).lower() != username:
+        raise HTTPException(status_code=403, detail="Session access denied")
+    return username, role
+
+
+def _fallback_session_title(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "").strip())
+    cleaned = re.sub(r"[^\w\s\-:,.!?]", "", cleaned)
+    words = cleaned.split()
+    if not words:
+        return "New Chat"
+    short = " ".join(words[:7]).strip(" .,!?:;")
+    if not short:
+        return "New Chat"
+    return short[:80]
+
+
+def _maybe_generate_session_title(prompt_text: str) -> str:
+    if not settings.aegis_llm_enabled:
+        return _fallback_session_title(prompt_text)
+    try:
+        title = generate_text(
+            "Generate a short chat session title (max 6 words). Return title only. "
+            f"User message: {prompt_text}",
+        )
+        cleaned = re.sub(r"\s+", " ", str(title or "").strip()).strip('"\'` ')
+        if not cleaned:
+            return _fallback_session_title(prompt_text)
+        return cleaned[:80]
+    except Exception:
+        return _fallback_session_title(prompt_text)
+
+
+@router.get("/demo/users", dependencies=[Depends(require_api_key)])
+def demo_users():
+    users = _seed_default_demo_users()
+    out = [{"username": u, "role": r} for u, r in sorted(users.items(), key=lambda kv: kv[0])]
+    return {"users": out}
+
 @router.post("/sessions", response_model=CreateSessionResponse, dependencies=[Depends(require_api_key)])
-def create_session():
+def create_session(request: Request, req: Optional[CreateSessionRequest] = None):
     session_id = str(uuid4())
-    store.create_session(session_id)
-    return CreateSessionResponse(session_id=session_id)
+    header_username, _role = _resolve_demo_identity(request)
+    username = header_username or (req.username.strip() if req and req.username else None)
+    store.create_session(session_id, username=username, title="New Chat")
+    return CreateSessionResponse(session_id=session_id, username=username, title="New Chat")
 
 @router.get("/sessions", dependencies=[Depends(require_api_key)])
-def list_sessions():
+def list_sessions(request: Request):
+    username, role = _resolve_demo_identity(request)
     sessions = store.list_sessions()
     items = []
     for sid, data in sessions.items():
-        items.append({"id": sid, "events": len(data.get("events", []))})
+        owner = str(data.get("username") or "").lower()
+        if role != "admin" and owner != username:
+            continue
+        ts = data.get("last_event_ts")
+        if ts is None:
+            ts = data.get("created_ts")
+        ts_value = float(ts) if ts is not None else 0.0
+        ts_readable = "-"
+        if ts_value > 0:
+            ts_readable = datetime.fromtimestamp(ts_value, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        items.append({
+            "id": sid,
+            "username": data.get("username"),
+            "title": data.get("title") or "New Chat",
+            "events": len(data.get("events", [])),
+            "timestamp": ts_value,
+            "timestamp_readable": ts_readable,
+        })
+    items.sort(key=lambda x: (-float(x.get("timestamp") or 0.0), str(x.get("id") or "")))
     return {"sessions": items}
 
 @router.post("/sessions/{session_id}/messages", response_model=MessageResponse, dependencies=[Depends(require_api_key)])
-def send_message(session_id: str, req: MessageRequest):
+def send_message(session_id: str, req: MessageRequest, request: Request):
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    _check_session_access(request, session_id)
     result = runtime.handle_user_message(
         session_id=session_id,
         content=req.content,
@@ -197,6 +331,13 @@ def send_message(session_id: str, req: MessageRequest):
         url_denylist=req.url_denylist,
         urls=req.urls,
     )
+    title_getter = getattr(store, "get_session_title", None)
+    title_setter = getattr(store, "set_session_title", None)
+    current_title = title_getter(session_id) if callable(title_getter) else None
+    if callable(title_setter) and (not current_title or str(current_title).strip().lower() in {"new chat", "untitled"}):
+        generated = _maybe_generate_session_title(req.content)
+        title_setter(session_id, generated)
+
     return MessageResponse(
         content=result.output,
         actions=result.actions,
@@ -207,9 +348,10 @@ def send_message(session_id: str, req: MessageRequest):
 
 
 @router.post("/sessions/{session_id}/guard/input", response_model=GuardInputResponse, dependencies=[Depends(require_api_key)])
-def guard_input(session_id: str, req: MessageRequest):
+def guard_input(session_id: str, req: MessageRequest, request: Request):
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    _check_session_access(request, session_id)
     result = runtime.guard_user_input(
         session_id=session_id,
         content=req.content,
@@ -226,9 +368,10 @@ def guard_input(session_id: str, req: MessageRequest):
 
 
 @router.post("/sessions/{session_id}/guard/output", response_model=GuardOutputResponse, dependencies=[Depends(require_api_key)])
-def guard_output(session_id: str, req: GuardOutputRequest):
+def guard_output(session_id: str, req: GuardOutputRequest, request: Request):
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    _check_session_access(request, session_id)
     result = runtime.guard_model_output(
         session_id=session_id,
         output_text=req.content,
@@ -241,18 +384,20 @@ def guard_output(session_id: str, req: GuardOutputRequest):
     return GuardOutputResponse(**result)
 
 @router.post("/sessions/{session_id}/approvals", dependencies=[Depends(require_api_key)])
-def approve_action(session_id: str, req: ApprovalRequest):
+def approve_action(session_id: str, req: ApprovalRequest, request: Request):
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    _check_session_access(request, session_id)
     ok = store.approve(session_id, req.approval_hash)
     if not ok:
         raise HTTPException(status_code=400, detail="Unknown or expired approval hash")
     return {"approved": True}
 
 @router.post("/sessions/{session_id}/tools/execute", response_model=ToolExecuteResponse, dependencies=[Depends(require_api_key)])
-def execute_tool(session_id: str, req: ToolExecuteRequest):
+def execute_tool(session_id: str, req: ToolExecuteRequest, request: Request):
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    _require_admin(request)
     return runtime.handle_tool_call(
         session_id=session_id,
         tool_name=req.tool_name,
@@ -268,9 +413,10 @@ def execute_tool(session_id: str, req: ToolExecuteRequest):
 
 
 @router.post("/sessions/{session_id}/guard/tool-pre", response_model=ToolGuardPreResponse, dependencies=[Depends(require_api_key)])
-def guard_tool_pre(session_id: str, req: ToolGuardPreRequest):
+def guard_tool_pre(session_id: str, req: ToolGuardPreRequest, request: Request):
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    _require_admin(request)
     result = runtime.guard_tool_call_pre(
         session_id=session_id,
         tool_name=req.tool_name,
@@ -284,9 +430,10 @@ def guard_tool_pre(session_id: str, req: ToolGuardPreRequest):
 
 
 @router.post("/sessions/{session_id}/guard/tool-post", response_model=ToolGuardPostResponse, dependencies=[Depends(require_api_key)])
-def guard_tool_post(session_id: str, req: ToolGuardPostRequest):
+def guard_tool_post(session_id: str, req: ToolGuardPostRequest, request: Request):
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    _require_admin(request)
     result = runtime.guard_tool_call_post(
         session_id=session_id,
         tool_name=req.tool_name,
@@ -299,15 +446,17 @@ def guard_tool_post(session_id: str, req: ToolGuardPostRequest):
     return ToolGuardPostResponse(**result)
 
 @router.get("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
-def get_session(session_id: str):
+def get_session(session_id: str, request: Request):
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    _check_session_access(request, session_id)
     return store.get_session(session_id)
 
 @router.get("/sessions/{session_id}/risk", dependencies=[Depends(require_api_key)])
-def get_session_risk(session_id: str):
+def get_session_risk(session_id: str, request: Request):
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    _require_admin(request)
     getter = getattr(store, "get_risk_state", None)
     if callable(getter):
         return {"risk_state": getter(session_id)}
@@ -315,7 +464,8 @@ def get_session_risk(session_id: str):
 
 
 @router.post("/replay/session/{session_id}", dependencies=[Depends(require_api_key)])
-def replay_session(session_id: str, req: ReplayRequest):
+def replay_session(session_id: str, req: ReplayRequest, request: Request):
+    _require_admin(request)
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
     original = store.get_session(session_id)
@@ -382,7 +532,8 @@ def replay_session(session_id: str, req: ReplayRequest):
 
 
 @router.get("/metrics/cost-risk", dependencies=[Depends(require_api_key)])
-def cost_risk_metrics():
+def cost_risk_metrics(request: Request):
+    _require_admin(request)
     data = _latest_benchmark_payload()
     metrics = (data or {}).get("metrics") or {}
     confusion = metrics.get("confusion") or {}
@@ -429,11 +580,13 @@ def cost_risk_metrics():
     }
 
 @router.get("/policies", dependencies=[Depends(require_api_key)])
-def get_policies():
+def get_policies(request: Request):
+    _require_admin(request)
     return {"policies": runtime.policy_engine.policies}
 
 @router.put("/policies", dependencies=[Depends(require_api_key)])
-def update_policies(req: PolicyUpdateRequest):
+def update_policies(req: PolicyUpdateRequest, request: Request):
+    _require_admin(request)
     if settings.aegis_db_enabled:
         try:
             save_policies_to_db(req.policies)
@@ -445,7 +598,8 @@ def update_policies(req: PolicyUpdateRequest):
     return {"ok": True, "count": len(req.policies)}
 
 @router.get("/tool-policies", dependencies=[Depends(require_api_key)])
-def get_tool_policies():
+def get_tool_policies(request: Request):
+    _require_admin(request)
     if settings.aegis_db_enabled:
         try:
             tools = load_tool_policies_from_db()
@@ -463,7 +617,8 @@ def get_tool_policies():
     return {"tools": tools}
 
 @router.put("/tool-policies", dependencies=[Depends(require_api_key)])
-def update_tool_policies(req: ToolPoliciesUpdateRequest):
+def update_tool_policies(req: ToolPoliciesUpdateRequest, request: Request):
+    _require_admin(request)
     if not settings.aegis_db_enabled:
         raise HTTPException(status_code=501, detail="Tool policy editing requires DB")
     try:

@@ -9,6 +9,7 @@ ROOT_PATH = Path(__file__).resolve().parents[3]
 LOGO_PATH = ROOT_PATH / "logo.png"
 TEMPLATES_PATH = Path(__file__).resolve().parents[1] / "templates"
 DASHBOARD_HTML_PATH = TEMPLATES_PATH / "dashboard.html"
+CHAT_HTML_PATH = TEMPLATES_PATH / "chat.html"
 
 
 @router.get("/dashboard/logo.png")
@@ -23,3 +24,10 @@ def dashboard():
     if not DASHBOARD_HTML_PATH.exists():
         return Response(status_code=404)
     return FileResponse(DASHBOARD_HTML_PATH, media_type="text/html")
+
+
+@router.get("/dashboard/chat")
+def dashboard_chat():
+    if not CHAT_HTML_PATH.exists():
+        return Response(status_code=404)
+    return FileResponse(CHAT_HTML_PATH, media_type="text/html")

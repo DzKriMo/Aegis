@@ -3,9 +3,10 @@ import time
 import hashlib
 from datetime import datetime, timezone
 from typing import Dict, Any
+from sqlalchemy import inspect, text
 
 from ..telemetry.collector import emit
-from .db import get_session, init_db
+from .db import get_session, get_engine, init_db
 from .models import SessionRecord, EventRecord
 
 
@@ -14,6 +15,44 @@ class DbStore:
         init_db()
         self._risk_state: Dict[str, Dict[str, Any]] = {}
         self._event_hash_cache: Dict[str, str] = {}
+        self._ensure_session_owner_columns()
+        self._supports_session_username = self._detect_session_username_support()
+        self._supports_session_title = self._detect_session_title_support()
+
+    def _ensure_session_owner_columns(self) -> None:
+        try:
+            engine = get_engine()
+            cols = {c["name"] for c in inspect(engine).get_columns("aegis_sessions")}
+            ddl = []
+            if "user_id" not in cols:
+                ddl.append("ALTER TABLE aegis_sessions ADD COLUMN user_id INTEGER")
+            if "username" not in cols:
+                ddl.append("ALTER TABLE aegis_sessions ADD COLUMN username VARCHAR(64)")
+            if "title" not in cols:
+                ddl.append("ALTER TABLE aegis_sessions ADD COLUMN title VARCHAR(160)")
+            if not ddl:
+                return
+            with engine.begin() as conn:
+                for stmt in ddl:
+                    conn.execute(text(stmt))
+        except Exception:
+            return
+
+    def _detect_session_username_support(self) -> bool:
+        try:
+            engine = get_engine()
+            cols = {c["name"] for c in inspect(engine).get_columns("aegis_sessions")}
+            return "username" in cols
+        except Exception:
+            return False
+
+    def _detect_session_title_support(self) -> bool:
+        try:
+            engine = get_engine()
+            cols = {c["name"] for c in inspect(engine).get_columns("aegis_sessions")}
+            return "title" in cols
+        except Exception:
+            return False
 
     def _default_risk_state(self) -> Dict[str, Any]:
         return {
@@ -25,11 +64,15 @@ class DbStore:
             "last_event_hash": "GENESIS",
         }
 
-    def create_session(self, session_id: str, tenant_id: int | None = None):
+    def create_session(self, session_id: str, tenant_id: int | None = None, username: str | None = None, title: str | None = None):
         s = get_session()
         if s is None:
             return
         rec = SessionRecord(session_id=session_id, tenant_id=tenant_id)
+        if self._supports_session_username:
+            rec.username = username
+        if self._supports_session_title:
+            rec.title = title or "New Chat"
         s.add(rec)
         s.commit()
         s.close()
@@ -94,9 +137,16 @@ class DbStore:
         s = get_session()
         if s is None:
             return {}
+        sess = s.query(SessionRecord).filter_by(session_id=session_id).first()
         events = s.query(EventRecord).filter_by(session_id=session_id).order_by(EventRecord.id.asc()).all()
         s.close()
-        return {"events": [json.loads(e.payload) for e in events], "risk_state": self.get_risk_state(session_id)}
+        return {
+            "session_id": session_id,
+            "username": getattr(sess, "username", None) if self._supports_session_username else None,
+            "title": getattr(sess, "title", None) if self._supports_session_title else None,
+            "events": [json.loads(e.payload) for e in events],
+            "risk_state": self.get_risk_state(session_id),
+        }
 
     def list_sessions(self) -> Dict[str, Dict[str, Any]]:
         s = get_session()
@@ -106,9 +156,67 @@ class DbStore:
         result = {}
         for sess in sessions:
             count = s.query(EventRecord).filter_by(session_id=sess.session_id).count()
-            result[sess.session_id] = {"events": [None] * count, "risk_state": self.get_risk_state(sess.session_id)}
+            latest = (
+                s.query(EventRecord)
+                .filter_by(session_id=sess.session_id)
+                .order_by(EventRecord.id.desc())
+                .first()
+            )
+            last_event_ts = None
+            if latest is not None:
+                try:
+                    payload = json.loads(latest.payload)
+                    ts = payload.get("ts")
+                    if ts is not None:
+                        last_event_ts = float(ts)
+                except Exception:
+                    last_event_ts = None
+            result[sess.session_id] = {
+                "username": getattr(sess, "username", None) if self._supports_session_username else None,
+                "title": getattr(sess, "title", None) if self._supports_session_title else None,
+                "events": [None] * count,
+                "last_event_ts": last_event_ts,
+                "risk_state": self.get_risk_state(sess.session_id),
+            }
         s.close()
         return result
+
+    def get_session_username(self, session_id: str) -> str | None:
+        if not self._supports_session_username:
+            return None
+        s = get_session()
+        if s is None:
+            return None
+        sess = s.query(SessionRecord).filter_by(session_id=session_id).first()
+        s.close()
+        username = getattr(sess, "username", None)
+        return str(username) if username else None
+
+    def get_session_title(self, session_id: str) -> str | None:
+        if not self._supports_session_title:
+            return None
+        s = get_session()
+        if s is None:
+            return None
+        sess = s.query(SessionRecord).filter_by(session_id=session_id).first()
+        s.close()
+        title = getattr(sess, "title", None)
+        return str(title) if title else None
+
+    def set_session_title(self, session_id: str, title: str) -> None:
+        if not self._supports_session_title:
+            return
+        cleaned = str(title or "").strip()
+        if not cleaned:
+            return
+        s = get_session()
+        if s is None:
+            return
+        sess = s.query(SessionRecord).filter_by(session_id=session_id).first()
+        if sess is not None:
+            sess.title = cleaned
+            s.commit()
+        s.close()
 
     # approvals not persisted in DB for demo
     def add_pending_approval(self, session_id: str, approval_hash: str):

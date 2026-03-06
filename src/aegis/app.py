@@ -5,7 +5,7 @@ import time
 import json
 
 from .api.routes import router
-from .api.dashboard import router as dashboard_router
+from .api.dashboard_ui import router as dashboard_router
 from .api.health import router as health_router
 from .api.auth import router as auth_router
 from fastapi.staticfiles import StaticFiles

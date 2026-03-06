@@ -11,8 +11,11 @@ class InMemoryStore:
     def __init__(self):
         self.sessions: Dict[str, Dict[str, Any]] = {}
 
-    def create_session(self, session_id: str):
+    def create_session(self, session_id: str, username: str | None = None, title: str | None = None):
         self.sessions[session_id] = {
+            "username": username,
+            "title": title or "New Chat",
+            "created_ts": time.time(),
             "events": [],
             "pending_approvals": set(),
             "approved": set(),
@@ -63,8 +66,40 @@ class InMemoryStore:
     def get_session(self, session_id: str) -> Dict[str, Any]:
         return self.sessions.get(session_id, {})
 
+    def get_session_username(self, session_id: str) -> str | None:
+        sess = self.sessions.get(session_id) or {}
+        username = sess.get("username")
+        return str(username) if username else None
+
+    def get_session_title(self, session_id: str) -> str | None:
+        sess = self.sessions.get(session_id) or {}
+        title = sess.get("title")
+        return str(title) if title else None
+
+    def set_session_title(self, session_id: str, title: str) -> None:
+        if session_id not in self.sessions:
+            return
+        cleaned = str(title or "").strip()
+        if not cleaned:
+            return
+        self.sessions[session_id]["title"] = cleaned
+
     def list_sessions(self) -> Dict[str, Dict[str, Any]]:
-        return self.sessions
+        out: Dict[str, Dict[str, Any]] = {}
+        for sid, data in self.sessions.items():
+            events = list(data.get("events") or [])
+            last_event_ts = None
+            if events:
+                try:
+                    ts = events[-1].get("ts")
+                    if ts is not None:
+                        last_event_ts = float(ts)
+                except Exception:
+                    last_event_ts = None
+            copied = dict(data)
+            copied["last_event_ts"] = last_event_ts
+            out[sid] = copied
+        return out
 
     def get_risk_state(self, session_id: str) -> Dict[str, Any]:
         sess = self.sessions.get(session_id) or {}
