@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from ..config import settings
@@ -30,4 +31,15 @@ def init_db():
     if not settings.aegis_db_enabled:
         return
     engine = get_engine()
-    Base.metadata.create_all(engine)
+    try:
+        Base.metadata.create_all(engine)
+        inspector = inspect(engine)
+        columns = {col["name"] for col in inspector.get_columns("aegis_sessions")}
+        with engine.begin() as conn:
+            if "created_at" not in columns:
+                conn.execute(text("ALTER TABLE aegis_sessions ADD COLUMN created_at INTEGER"))
+            if "title" not in columns:
+                conn.execute(text("ALTER TABLE aegis_sessions ADD COLUMN title VARCHAR(200)"))
+    except OperationalError as exc:
+        if "already exists" not in str(exc).lower():
+            raise

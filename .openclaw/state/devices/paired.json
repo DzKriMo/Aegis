@@ -3,8 +3,8 @@
     "deviceId": "787f5fc155a9094e762e6b9c509ea7c02bf62d8339dac0bb62903473b90b01e5",
     "publicKey": "wCj-X0Rr-CXgqiuViAlW6IIhIBHUM-bVBgPR5q8v_QM",
     "platform": "win32",
-    "clientId": "cli",
-    "clientMode": "cli",
+    "clientId": "gateway-client",
+    "clientMode": "backend",
     "role": "operator",
     "roles": [
       "operator"

@@ -1,19 +1,19 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.3.2",
-    "lastTouchedAt": "2026-03-05T15:52:31.452Z"
+    "lastTouchedAt": "2026-03-24T00:39:36.908Z"
   },
   "models": {
     "mode": "merge",
     "providers": {
-      "local": {
-        "baseUrl": "http://127.0.0.1:8080/v1",
+      "ollama": {
+        "baseUrl": "http://127.0.0.1:11434/v1",
         "apiKey": "local-free",
         "api": "openai-completions",
         "models": [
           {
-            "id": "qwen2.5-3b-instruct",
-            "name": "Qwen2.5 3B Instruct (Local llama.cpp)",
+            "id": "qwen2.5:7b-instruct",
+            "name": "Ollama: qwen2.5:7b-instruct",
             "reasoning": false,
             "input": [
               "text"
@@ -34,10 +34,10 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "local/qwen2.5-3b-instruct"
+        "primary": "ollama/qwen2.5:7b-instruct"
       },
       "models": {
-        "local/qwen2.5-3b-instruct": {
+        "ollama/qwen2.5:7b-instruct": {
           "params": {
             "maxTokens": 256,
             "timeoutMs": 180000,
@@ -94,7 +94,7 @@
         "sourcePath": "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\integrations\\openclaw-aegis-guard",
         "installPath": "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\integrations\\openclaw-aegis-guard",
         "version": "0.1.0",
-        "installedAt": "2026-03-05T15:52:31.311Z"
+        "installedAt": "2026-03-24T00:39:36.898Z"
       }
     }
   }

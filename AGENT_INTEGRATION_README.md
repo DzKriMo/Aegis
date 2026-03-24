@@ -70,6 +70,12 @@ def guarded_user_message(session_id: str, content: str):
     return {"status": "allowed", "content": res.get("content")}
 ```
 
+Included reusable client/adapter code:
+
+- `src/aegis/tools/client.py`
+- `src/aegis/tools/agent_adapter.py`
+- `src/aegis/tools/catalog.py`
+
 ## 4. Tooling Integration Pattern
 
 Never execute tools directly from the agent. Always proxy through Aegis:
@@ -212,6 +218,22 @@ Flow in the runner:
 4. Guard final answer with `/guard/output`.
 5. Print only approved/sanitized output.
 
+## 12b. Real Guarded Agent Example
+
+Run a fuller agent loop that actually exposes a guarded tool catalog to the model:
+
+```powershell
+$env:PYTHONPATH="src"
+python examples/real_guarded_agent.py
+```
+
+What makes this more real than the lightweight runner:
+
+1. It uses an explicit tool catalog.
+2. It routes tool calls through the shared Aegis adapter.
+3. It guards both inbound and outbound content.
+4. It supports real local filesystem and web-fetch tasks within Aegis policy.
+
 ## 13. OpenClaw Bridge (Input/Output Guarding)
 
 OpenClaw source is cloneable in this workspace (for local experimentation), and a bridge script is included:
@@ -271,3 +293,35 @@ Restart gateway after config changes.
   - Dashboard UI: `http://127.0.0.1:8000/v1/dashboard`
   - Session detail API: `GET /v1/sessions/{session_id}`
   - Risk state API: `GET /v1/sessions/{session_id}/risk`
+
+## 16. Local Docker Compose Stack
+
+For a practical local stack with Aegis + Redis while keeping Ollama on the host:
+
+```powershell
+docker compose -f docker-compose.local.yml up --build
+```
+
+What this gives you:
+
+1. Aegis API in Docker
+2. Persistent SQLite state mounted to a Docker volume
+3. Redis-backed rate limiting
+4. Ollama kept on the host for simpler local model management
+
+Assumptions:
+
+1. Ollama is already running on the host at `http://127.0.0.1:11434`.
+2. Docker can reach the host through `host.docker.internal`.
+
+Then open:
+
+- Dashboard: `http://127.0.0.1:8000/v1/dashboard`
+
+And run the real agent against it:
+
+```powershell
+$env:PYTHONPATH="src"
+$env:AEGIS_BASE_URL="http://127.0.0.1:8000/v1"
+python examples/real_guarded_agent.py
+```

@@ -20,7 +20,7 @@ _TOOLS: Dict[str, ToolPolicy] = {
     "shell": ToolPolicy(
         name="shell",
         allowed_envs=["dev"],
-        allowlist=["python", "pip", "dir", "ls", "echo"],
+        allowlist=["python", "py", "pip", "dir", "ls", "echo", "pwd", "whoami", "git", "type"],
         timeout_seconds=5,
     ),
     "filesystem_read": ToolPolicy(
@@ -35,6 +35,48 @@ _TOOLS: Dict[str, ToolPolicy] = {
         allowed_envs=["dev"],
         allowlist=[],
         timeout_seconds=5,
+        max_bytes=64 * 1024,
+    ),
+    "directory_list": ToolPolicy(
+        name="directory_list",
+        allowed_envs=["dev", "prod"],
+        allowlist=[],
+        timeout_seconds=2,
+        max_bytes=64 * 1024,
+    ),
+    "filesystem_write": ToolPolicy(
+        name="filesystem_write",
+        allowed_envs=["dev"],
+        allowlist=[],
+        timeout_seconds=3,
+        max_bytes=32 * 1024,
+    ),
+    "filesystem_edit": ToolPolicy(
+        name="filesystem_edit",
+        allowed_envs=["dev"],
+        allowlist=[],
+        timeout_seconds=3,
+        max_bytes=64 * 1024,
+    ),
+    "filesystem_patch": ToolPolicy(
+        name="filesystem_patch",
+        allowed_envs=["dev"],
+        allowlist=[],
+        timeout_seconds=4,
+        max_bytes=128 * 1024,
+    ),
+    "file_find": ToolPolicy(
+        name="file_find",
+        allowed_envs=["dev", "prod"],
+        allowlist=[],
+        timeout_seconds=4,
+        max_bytes=64 * 1024,
+    ),
+    "text_search": ToolPolicy(
+        name="text_search",
+        allowed_envs=["dev", "prod"],
+        allowlist=[],
+        timeout_seconds=4,
         max_bytes=64 * 1024,
     ),
     "json_transform": ToolPolicy(

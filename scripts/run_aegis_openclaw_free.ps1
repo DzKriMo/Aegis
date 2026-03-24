@@ -1,14 +1,12 @@
 param(
     [int]$AegisPort = 8000,
     [int]$OpenClawPort = 18790,
-    [int]$LlamaPort = 8080,
-    [int]$LlamaCtxSize = 16384,
+    [string]$OllamaBaseUrl = "http://127.0.0.1:11434",
+    [string]$OllamaModel = "qwen2.5:7b-instruct",
     [string]$AegisApiKey = "changeme",
     [string]$OpenClawCommand = "openclaw.cmd",
     [string]$OpenClawConfigPath = "",
     [string]$OpenClawStateDir = "",
-    [string]$LlamaServerExe = "",
-    [string]$LlamaModelPath = "",
     [string]$PythonExe = "",
     [switch]$OpenDashboard
 )
@@ -53,21 +51,14 @@ if ([string]::IsNullOrWhiteSpace($OpenClawConfigPath)) {
 if ([string]::IsNullOrWhiteSpace($OpenClawStateDir)) {
     $OpenClawStateDir = Join-Path $repoRoot ".openclaw\state"
 }
-if ([string]::IsNullOrWhiteSpace($LlamaServerExe)) {
-    $LlamaServerExe = Join-Path $repoRoot "llama.cpp\llama-server.exe"
-}
-if ([string]::IsNullOrWhiteSpace($LlamaModelPath)) {
-    $LlamaModelPath = Join-Path $repoRoot "models\qwen2.5-3b-instruct-q4_k_m.gguf"
-}
 
 if (-not (Test-Path $pluginPath)) {
     throw "Plugin path not found: $pluginPath"
 }
-if (-not (Test-Path $LlamaServerExe)) {
-    throw "llama-server executable not found at: $LlamaServerExe"
-}
-if (-not (Test-Path $LlamaModelPath)) {
-    throw "Local GGUF model not found at: $LlamaModelPath"
+try {
+    $null = Invoke-RestMethod -Method Get -Uri "$OllamaBaseUrl/api/tags" -TimeoutSec 5
+} catch {
+    throw "Ollama is not reachable at $OllamaBaseUrl. Start Ollama first or pass -OllamaBaseUrl."
 }
 
 if (-not (Test-Path (Split-Path -Parent $OpenClawConfigPath))) {
@@ -115,9 +106,10 @@ $cfg.gateway.bind = "loopback"
 $cfg.gateway.port = $OpenClawPort
 $cfg.gateway.auth = @{ mode = "none" }
 
-$cfg.agents.defaults.model = @{ primary = "local/qwen2.5-3b-instruct" }
+$providerModelId = "ollama/$OllamaModel"
+$cfg.agents.defaults.model = @{ primary = $providerModelId }
 $cfg.agents.defaults.models = @{
-    "local/qwen2.5-3b-instruct" = @{
+    $providerModelId = @{
         params = @{
             maxTokens = 256
             timeoutMs = 180000
@@ -153,14 +145,14 @@ $cfg.plugins.entries."aegis-guard" = @{
 $cfg.models = @{
     mode = "merge"
     providers = @{
-        local = @{
-            baseUrl = "http://127.0.0.1:$LlamaPort/v1"
+        ollama = @{
+            baseUrl = "$OllamaBaseUrl/v1"
             apiKey = "local-free"
             api = "openai-completions"
             models = @(
                 @{
-                    id = "qwen2.5-3b-instruct"
-                    name = "Qwen2.5 3B Instruct (Local llama.cpp)"
+                    id = $OllamaModel
+                    name = "Ollama: $OllamaModel"
                     reasoning = $false
                     input = @("text")
                     cost = @{
@@ -169,7 +161,7 @@ $cfg.models = @{
                         cacheRead = 0
                         cacheWrite = 0
                     }
-                    contextWindow = $LlamaCtxSize
+                    contextWindow = 32768
                     maxTokens = 2048
                 }
             )
@@ -191,22 +183,19 @@ try {
 
 & $OpenClawCommand plugins enable aegis-guard | Out-Host
 
-$llamaWorkDir = Split-Path -Parent $LlamaServerExe
-$llamaCmd = "Set-Location '$llamaWorkDir'; & '$LlamaServerExe' -m '$LlamaModelPath' --port $LlamaPort --host 127.0.0.1 --ctx-size $LlamaCtxSize --n-gpu-layers 35"
-$aegisCmd = "Set-Location '$repoRoot'; `$env:AEGIS_API_KEY='$AegisApiKey'; $pythonLaunch -m uvicorn --app-dir src aegis.api.main:app --port $AegisPort"
+$aegisCmd = "Set-Location '$repoRoot'; `$env:AEGIS_API_KEY='$AegisApiKey'; `$env:AEGIS_OLLAMA_BASE_URL='$OllamaBaseUrl'; `$env:AEGIS_LLM_ENABLED='true'; `$env:AEGIS_MODEL_ENABLED='true'; `$env:AEGIS_LLM_ENDPOINT='$OllamaBaseUrl/v1/chat/completions'; `$env:AEGIS_MODEL_ENDPOINT='$OllamaBaseUrl/v1/chat/completions'; `$env:AEGIS_LLM_MODEL='$OllamaModel'; `$env:AEGIS_MODEL_NAME='$OllamaModel'; $pythonLaunch -m uvicorn --app-dir src aegis.api.main:app --port $AegisPort"
 $gatewayCmd = "Set-Location '$repoRoot'; `$env:AEGIS_API_KEY='$AegisApiKey'; `$env:AEGIS_BASE_URL='$aegisUrl'; `$env:OPENCLAW_CONFIG_PATH='$OpenClawConfigPath'; `$env:OPENCLAW_STATE_DIR='$OpenClawStateDir'; $OpenClawCommand gateway run --port $OpenClawPort --auth none --verbose"
 
-Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $llamaCmd | Out-Null
 Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $aegisCmd | Out-Null
 Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $gatewayCmd | Out-Null
 
 Start-Sleep -Seconds 6
-$llamaReady = $false
+$ollamaReady = $false
 for ($i = 0; $i -lt 10; $i++) {
     try {
-        $resp = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$LlamaPort/v1/models" -TimeoutSec 3
+        $resp = Invoke-WebRequest -UseBasicParsing -Uri "$OllamaBaseUrl/api/tags" -TimeoutSec 3
         if ($resp.StatusCode -eq 200) {
-            $llamaReady = $true
+            $ollamaReady = $true
             break
         }
     } catch {
@@ -214,17 +203,17 @@ for ($i = 0; $i -lt 10; $i++) {
     }
 }
 
-Write-Host "[free-stack] started llama.cpp on :$LlamaPort"
-Write-Host "[free-stack] llama ctx-size: $LlamaCtxSize"
+Write-Host "[free-stack] using Ollama at $OllamaBaseUrl"
+Write-Host "[free-stack] active Ollama model: $OllamaModel"
 Write-Host "[free-stack] started Aegis API on :$AegisPort"
 Write-Host "[free-stack] python launcher: $pythonLaunch"
 Write-Host "[free-stack] started OpenClaw gateway on :$OpenClawPort"
 Write-Host "[free-stack] dashboard: http://127.0.0.1:$AegisPort/v1/dashboard"
 Write-Host "[free-stack] openclaw status: openclaw.cmd --profile aegis health --json"
-if ($llamaReady) {
-    Write-Host "[free-stack] llama endpoint ready: http://127.0.0.1:$LlamaPort/v1/models"
+if ($ollamaReady) {
+    Write-Host "[free-stack] Ollama endpoint ready: $OllamaBaseUrl/api/tags"
 } else {
-    Write-Host "[free-stack] llama endpoint not ready yet, check the llama.cpp window logs."
+    Write-Host "[free-stack] Ollama endpoint not ready yet, check the Ollama service logs."
 }
 
 if ($OpenDashboard) {

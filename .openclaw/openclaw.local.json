@@ -1,8 +1,4 @@
 ﻿{
-    "meta":  {
-                 "lastTouchedVersion":  "2026.3.2",
-                 "lastTouchedAt":  "2026-03-05T18:27:26.344Z"
-             },
     "models":  {
                    "providers":  {
                                      "local":  {
@@ -33,9 +29,13 @@
                },
     "agents":  {
                    "defaults":  {
-                                    "model":  {
-                                                  "primary":  "local/qwen2.5-3b-instruct"
-                                              },
+                                    "workspace":  "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\.openclaw\\workspace",
+                                    "compaction":  {
+                                                       "memoryFlush":  {
+                                                                           "enabled":  false
+                                                                       },
+                                                       "mode":  "safeguard"
+                                                   },
                                     "models":  {
                                                    "local/qwen2.5-3b-instruct":  {
                                                                                      "params":  {
@@ -45,57 +45,28 @@
                                                                                                 }
                                                                                  }
                                                },
-                                    "workspace":  "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\.openclaw\\workspace",
-                                    "compaction":  {
-                                                       "mode":  "safeguard",
-                                                       "memoryFlush":  {
-                                                                           "enabled":  false
-                                                                       }
-                                                   }
+                                    "model":  {
+                                                  "primary":  "local/qwen2.5-3b-instruct"
+                                              }
                                 }
                },
-    "commands":  {
-                     "native":  "auto",
-                     "nativeSkills":  "auto",
-                     "restart":  true,
-                     "ownerDisplay":  "raw"
-                 },
-    "gateway":  {
-                    "port":  18790,
-                    "mode":  "local",
-                    "bind":  "loopback",
-                    "auth":  {
-                                 "mode":  "none"
-                             }
-                },
     "plugins":  {
-                    "enabled":  true,
                     "load":  {
                                  "paths":  [
-                                               "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\integrations\\openclaw-aegis-guard"
+
                                            ]
                              },
                     "entries":  {
-                                    "aegis-guard":  {
-                                                        "config":  {
-                                                                       "guardOutboundMessages":  true,
-                                                                       "environment":  "dev",
-                                                                       "aegisUrl":  "http://127.0.0.1:8000/v1",
-                                                                       "observeLlmIo":  true,
-                                                                       "enforceInputGate":  true,
-                                                                       "apiKeyEnv":  "AEGIS_API_KEY"
-                                                                   },
-                                                        "enabled":  true
-                                                    }
+
                                 },
-                    "installs":  {
-                                     "aegis-guard":  {
-                                                         "source":  "path",
-                                                         "sourcePath":  "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\integrations\\openclaw-aegis-guard",
-                                                         "installPath":  "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\integrations\\openclaw-aegis-guard",
-                                                         "version":  "0.1.0",
-                                                         "installedAt":  "2026-03-05T18:27:20.348Z"
-                                                     }
-                                 }
+                    "enabled":  false
+                },
+    "gateway":  {
+                    "port":  18790,
+                    "bind":  "loopback",
+                    "mode":  "local",
+                    "auth":  {
+                                 "mode":  "none"
+                             }
                 }
 }

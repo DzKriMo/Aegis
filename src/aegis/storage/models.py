@@ -25,6 +25,8 @@ class SessionRecord(Base):
     id = Column(Integer, primary_key=True)
     session_id = Column(String(64), nullable=False, unique=True)
     tenant_id = Column(Integer, ForeignKey("aegis_tenants.id"), nullable=True)
+    created_at = Column(Integer, nullable=True)
+    title = Column(String(200), nullable=True)
 
 
 class EventRecord(Base):
@@ -54,3 +56,21 @@ class ToolPolicyRecord(Base):
     allowlist = Column(Text, nullable=True)  # JSON array
     timeout_seconds = Column(Integer, nullable=False, default=5)
     max_bytes = Column(Integer, nullable=True)
+
+
+class ApprovalRecord(Base):
+    __tablename__ = "aegis_approvals"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(String(64), nullable=True)
+    approval_hash = Column(String(128), nullable=False, index=True)
+    scope = Column(String(32), nullable=False, default="exact")
+    actor = Column(String(128), nullable=True)
+    reason = Column(Text, nullable=True)
+    stage = Column(String(32), nullable=True)
+    tool_name = Column(String(64), nullable=True)
+    tenant_id = Column(String(128), nullable=True)
+    environment = Column(String(64), nullable=True)
+    reusable = Column(Boolean, default=True)
+    active = Column(Boolean, default=True)
+    expires_at = Column(Integer, nullable=True)
+    metadata_json = Column(Text, nullable=True)

@@ -24,9 +24,9 @@ def _extract_content(resp_json: Dict[str, Any]) -> str:
     return ""
 
 
-def generate_text(prompt_text: str) -> str:
+def generate_text(prompt_text: str, model_name: str | None = None) -> str:
     payload: Dict[str, Any] = {
-        "model": settings.aegis_model_name,
+        "model": model_name or settings.aegis_model_name,
         "temperature": 0.1,
         "max_tokens": settings.aegis_model_max_tokens,
         "messages": [

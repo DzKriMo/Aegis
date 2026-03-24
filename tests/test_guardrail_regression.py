@@ -81,6 +81,48 @@ class GuardrailRegressionTests(unittest.TestCase):
                 else:
                     self.fail(f"Unsupported case kind: {kind}")
 
+    def test_trusted_local_summary_secret_match_becomes_approval_not_block(self):
+        runtime = GuardedRuntime(store=InMemoryStore())
+        session_id = "trusted-local-summary"
+        runtime.store.create_session(session_id)
+
+        result = runtime.guard_model_output(
+            session_id=session_id,
+            output_text="The README explains how to configure the app with an API key stored in .env.",
+            metadata={
+                "source": "real_guarded_agent",
+                "derived_from_tool": "filesystem_read",
+                "tool_trust": "high",
+                "summary_mode": True,
+            },
+            environment="dev",
+        )
+
+        self.assertFalse(result["blocked"])
+        self.assertTrue(result["require_approval"])
+        self.assertIn("approval", (result.get("message") or "").lower())
+
+    def test_benign_local_file_summary_is_not_secret_or_exfiltration(self):
+        detectors = DetectorRegistry.default()
+        context = {
+            "labels": [],
+            "environment": "dev",
+            "metadata": {
+                "source": "real_guarded_agent",
+                "derived_from_tool": "filesystem_read",
+                "tool_trust": "high",
+                "summary_mode": True,
+            },
+            "risk_state": {},
+        }
+        text = "The file krimo.txt contains: 'KriMo elm9wd fl Informatique'."
+
+        self.assertFalse(detectors.run("secrets", text, dict(context)))
+        self.assertFalse(detectors.run("exfiltration", text, dict(context)))
+
+        decision = self.engine.evaluate(text=text, stage="postllm", detectors=detectors, context=dict(context))
+        self.assertFalse(decision.blocked)
+
 
 if __name__ == "__main__":
     unittest.main()

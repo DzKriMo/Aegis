@@ -13,6 +13,13 @@ from ..prellm.normalize import normalize_text
 from ..prellm.network import evaluate_urls
 from ..postllm.approval import approval_hash
 from ..config import settings
+from ..services.control_plane import (
+    force_approval_for_tool,
+    get_control_settings,
+    pack_threshold,
+    resolve_tenant_pack,
+)
+from ..services.tool_provenance import assess_tool_provenance
 from .model_client import generate_text
 from .risk_control import (
     dynamic_thresholds,
@@ -67,14 +74,37 @@ class GuardedRuntime:
         if callable(setter):
             setter(session_id, state)
 
-    def _scan_tool_output_for_injection(self, result: Dict[str, Any]) -> bool:
-        return bool(self._tool_injection_re.search(json.dumps(result or {}, ensure_ascii=True)))
+    def _scan_tool_output_for_injection(self, tool_name: str, result: Dict[str, Any]) -> bool:
+        text = json.dumps(result or {}, ensure_ascii=True)
+        if tool_name in {"directory_list", "filesystem_write", "json_transform"}:
+            return False
+        if tool_name == "filesystem_read":
+            # Local repository files routinely contain security examples and terms
+            # like "system prompt". Let policy + provenance handle those instead
+            # of quarantining the whole session.
+            return False
+        return bool(self._tool_injection_re.search(text))
 
     def _apply_text_decision(self, text: str, decision) -> str:
         transformed = decision.apply_redaction(text)
         if decision.modified_text is not None:
             transformed = decision.modified_text
         return transformed
+
+    def _should_soften_postllm_block(self, decision, context: Dict[str, Any]) -> bool:
+        metadata = context.get("metadata") or {}
+        matched_rules = set(getattr(decision, "matched_rules", []) or [])
+        tool_name = str(metadata.get("derived_from_tool") or metadata.get("tool_name") or "").strip()
+        tool_trust = str(metadata.get("tool_trust") or "").strip().lower()
+        summary_mode = bool(metadata.get("summary_mode"))
+        trusted_local_tools = {"filesystem_read", "directory_list"}
+        return (
+            bool(getattr(decision, "blocked", False))
+            and matched_rules == {"block_secrets"}
+            and tool_name in trusted_local_tools
+            and tool_trust == "high"
+            and summary_mode
+        )
 
     def _mask_strings(self, value: Any, replacement: str) -> Any:
         if isinstance(value, str):
@@ -85,13 +115,13 @@ class GuardedRuntime:
             return {k: self._mask_strings(v, replacement) for k, v in value.items()}
         return value
 
-    def _build_model_output(self, prompt_text: str) -> str:
+    def _build_model_output(self, prompt_text: str, model_name: Optional[str] = None) -> str:
         cleaned = " ".join((prompt_text or "").strip().split())
         if not cleaned:
             cleaned = "[empty input]"
         cleaned = cleaned[:1200]
         if settings.aegis_model_enabled:
-            return generate_text(cleaned)
+            return generate_text(cleaned, model_name=model_name)
         return f"Model draft: {cleaned}"
 
     def _decision_severity(self, decision) -> int:
@@ -102,6 +132,89 @@ class GuardedRuntime:
         if getattr(decision, "warn", False):
             return 1
         return 0
+
+    def _approval_metadata(
+        self,
+        stage: str,
+        context: Dict[str, Any],
+        tool_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "stage": stage,
+            "tool_name": tool_name,
+            "tenant_id": context.get("tenant_id"),
+            "environment": context.get("environment"),
+            "role": context.get("role"),
+            "labels": list(context.get("labels") or []),
+            "tenant_pack": (context.get("tenant_pack") or {}).get("name"),
+        }
+
+    def _is_preapproved(
+        self,
+        session_id: str,
+        approval_token: str,
+        stage: str,
+        context: Dict[str, Any],
+        tool_name: Optional[str] = None,
+    ) -> bool:
+        checker = getattr(self.store, "is_approved", None)
+        if not callable(checker):
+            return False
+        return bool(checker(session_id, approval_token, stage=stage, context=context, tool_name=tool_name))
+
+    def _queue_approval(
+        self,
+        session_id: str,
+        approval_token: str,
+        stage: str,
+        context: Dict[str, Any],
+        tool_name: Optional[str] = None,
+    ) -> None:
+        adder = getattr(self.store, "add_pending_approval", None)
+        if callable(adder):
+            adder(session_id, approval_token, metadata=self._approval_metadata(stage, context, tool_name=tool_name))
+
+    def _apply_tenant_pack(
+        self,
+        tenant_id: Optional[str],
+        environment: Optional[str],
+        labels: List[str],
+        metadata: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        pack = resolve_tenant_pack(tenant_id, environment, metadata)
+        pack_labels = [str(x) for x in (pack.get("labels") or [])]
+        merged_labels = list(dict.fromkeys(list(labels or []) + pack_labels))
+        context["labels"] = merged_labels
+        context["tenant_pack"] = pack
+        return pack
+
+    def _maybe_consensus_classification(
+        self,
+        text: str,
+        primary_model: Optional[str],
+        context: Dict[str, Any],
+        log_fn,
+    ) -> Dict[str, Any] | None:
+        control = get_control_settings()
+        verifier_model = str(control.get("verifier_model") or "").strip()
+        if not control.get("consensus_enabled") or not verifier_model:
+            return None
+        if verifier_model == (primary_model or settings.aegis_llm_model):
+            return None
+        verifier = classify_text(text, model_name=verifier_model)
+        primary = context.get("llm_classification") or {}
+        keys = [k for k in verifier.keys() if not str(k).startswith("__")]
+        disagreements = [k for k in keys if bool(verifier.get(k)) != bool(primary.get(k))]
+        result = {
+            "primary_model": primary_model or settings.aegis_llm_model,
+            "verifier_model": verifier_model,
+            "primary": primary,
+            "verifier": verifier,
+            "disagreements": disagreements,
+        }
+        log_fn({"stage": "llm_consensus", **result})
+        return result
 
     def guard_user_input(
         self,
@@ -130,6 +243,7 @@ class GuardedRuntime:
             "metadata": metadata,
             "risk_state": risk_state,
         }
+        pack = self._apply_tenant_pack(tenant_id, environment, labels, metadata, context)
 
         def _log(event: Dict[str, Any]) -> None:
             payload = dict(event)
@@ -172,6 +286,9 @@ class GuardedRuntime:
                 "classification": llm_cls,
             },
         )
+        consensus = self._maybe_consensus_classification(normalized, settings.aegis_llm_model, context, _log)
+        if consensus:
+            context["llm_consensus"] = consensus
 
         local_cls = classify_guardrail_label(normalized)
         context["local_classification"] = local_cls
@@ -225,10 +342,15 @@ class GuardedRuntime:
                 }
 
         decision = self.policy_engine.evaluate(normalized, stage="prellm", detectors=self.detectors, context=context)
-        if not decision.blocked and not decision.warn and dyn.ood_score >= float(settings.aegis_ood_warn_threshold):
+        if not decision.blocked and not decision.warn and dyn.ood_score >= float(pack_threshold(pack, "ood_warn_threshold", float(settings.aegis_ood_warn_threshold))):
             decision.warn = True
             decision.message = "OOD uncertainty elevated; caution mode applied"
             decision.risk_score += 0.25
+        disagreement_threshold = int(get_control_settings().get("consensus_disagreement_threshold", 1))
+        if consensus and len(consensus.get("disagreements") or []) >= disagreement_threshold and not decision.blocked:
+            decision.require_approval = True
+            decision.message = decision.message or "Consensus verifier disagreed with primary classifier"
+            decision.risk_score += 0.2
         _log(
             {
                 "stage": "prellm",
@@ -258,8 +380,8 @@ class GuardedRuntime:
 
         if decision.require_approval:
             h = approval_hash(stage="prellm", content=normalized, context=context)
-            if not self.store.is_approved(session_id, h):
-                self.store.add_pending_approval(session_id, h)
+            if not self._is_preapproved(session_id, h, stage="prellm", context=context):
+                self._queue_approval(session_id, h, stage="prellm", context=context)
                 self._update_and_persist_risk_state(
                     session_id,
                     risk_state,
@@ -319,6 +441,7 @@ class GuardedRuntime:
             "metadata": metadata,
             "risk_state": risk_state,
         }
+        self._apply_tenant_pack(tenant_id, environment, labels, metadata, context)
 
         def _log(event: Dict[str, Any]) -> None:
             payload = dict(event)
@@ -334,6 +457,20 @@ class GuardedRuntime:
                 "decision": out_decision.to_dict(),
             },
         )
+
+        if self._should_soften_postllm_block(out_decision, context):
+            out_decision.blocked = False
+            out_decision.require_approval = True
+            out_decision.message = "Trusted local summary matched secret heuristics and requires approval"
+            out_decision.risk_score = min(max(float(out_decision.risk_score or 0.0), 0.18), 0.25)
+            _log(
+                {
+                    "stage": "postllm.softened",
+                    "reason": "trusted_local_summary_secret_heuristic",
+                    "tool_name": (metadata or {}).get("derived_from_tool"),
+                    "matched_rules": list(out_decision.matched_rules or []),
+                },
+            )
 
         if out_decision.blocked:
             self._update_and_persist_risk_state(
@@ -356,8 +493,8 @@ class GuardedRuntime:
 
         if out_decision.require_approval:
             h = approval_hash(stage="postllm", content=output_text, context=context)
-            if not self.store.is_approved(session_id, h):
-                self.store.add_pending_approval(session_id, h)
+            if not self._is_preapproved(session_id, h, stage="postllm", context=context):
+                self._queue_approval(session_id, h, stage="postllm", context=context)
                 self._update_and_persist_risk_state(
                     session_id,
                     risk_state,
@@ -443,6 +580,7 @@ class GuardedRuntime:
         url_allowlist: Optional[List[str]] = None,
         url_denylist: Optional[List[str]] = None,
         urls: Optional[List[str]] = None,
+        model_name: Optional[str] = None,
     ) -> RuntimeResult:
         request_id = str(uuid4())
         labels = labels or []
@@ -458,7 +596,9 @@ class GuardedRuntime:
             "labels": labels,
             "metadata": metadata,
             "risk_state": risk_state,
+            "model_name": model_name or settings.aegis_model_name,
         }
+        pack = self._apply_tenant_pack(tenant_id, environment, labels, metadata, context)
 
         def _log(event: Dict[str, Any]) -> None:
             payload = dict(event)
@@ -480,7 +620,7 @@ class GuardedRuntime:
 
         # 1) LLM classification (always log for visibility)
         try:
-            llm_cls = classify_text(normalized)
+            llm_cls = classify_text(normalized, model_name=model_name)
         except Exception as exc:
             if settings.aegis_fail_closed:
                 return RuntimeResult(
@@ -502,6 +642,9 @@ class GuardedRuntime:
                 "classification": llm_cls,
             },
         )
+        consensus = self._maybe_consensus_classification(normalized, model_name or settings.aegis_llm_model, context, _log)
+        if consensus:
+            context["llm_consensus"] = consensus
 
         # 1b) local supervised classifier (optional, low latency)
         local_cls = classify_guardrail_label(normalized)
@@ -557,10 +700,15 @@ class GuardedRuntime:
 
         # 3) policy evaluate input
         decision = self.policy_engine.evaluate(normalized, stage="prellm", detectors=self.detectors, context=context)
-        if not decision.blocked and not decision.warn and dyn.ood_score >= float(settings.aegis_ood_warn_threshold):
+        if not decision.blocked and not decision.warn and dyn.ood_score >= float(pack_threshold(pack, "ood_warn_threshold", float(settings.aegis_ood_warn_threshold))):
             decision.warn = True
             decision.message = "OOD uncertainty elevated; caution mode applied"
             decision.risk_score += 0.25
+        disagreement_threshold = int(get_control_settings().get("consensus_disagreement_threshold", 1))
+        if consensus and len(consensus.get("disagreements") or []) >= disagreement_threshold and not decision.blocked:
+            decision.require_approval = True
+            decision.message = decision.message or "Consensus verifier disagreed with primary classifier"
+            decision.risk_score += 0.2
         _log(
             {
                 "stage": "prellm",
@@ -587,8 +735,8 @@ class GuardedRuntime:
             )
         if decision.require_approval:
             h = approval_hash(stage="prellm", content=normalized, context=context)
-            if not self.store.is_approved(session_id, h):
-                self.store.add_pending_approval(session_id, h)
+            if not self._is_preapproved(session_id, h, stage="prellm", context=context):
+                self._queue_approval(session_id, h, stage="prellm", context=context)
                 self._update_and_persist_risk_state(
                     session_id,
                     risk_state,
@@ -622,10 +770,11 @@ class GuardedRuntime:
 
         # 4) model response
         try:
-            model_output = self._build_model_output(transformed_input)
-            _log({"stage": "model", "input": transformed_input, "output": model_output})
+            resolved_model = model_name or settings.aegis_model_name
+            model_output = self._build_model_output(transformed_input, model_name=resolved_model)
+            _log({"stage": "model", "model": resolved_model, "input": transformed_input, "output": model_output})
         except Exception as exc:
-            _log({"stage": "model.error", "input": transformed_input, "error": str(exc)})
+            _log({"stage": "model.error", "model": model_name or settings.aegis_model_name, "input": transformed_input, "error": str(exc)})
             if settings.aegis_fail_closed:
                 self._update_and_persist_risk_state(
                     session_id,
@@ -644,7 +793,7 @@ class GuardedRuntime:
                     metadata={},
                 )
             model_output = f"Model draft (fallback): {transformed_input[:500]}"
-            _log({"stage": "model.fallback", "input": transformed_input, "output": model_output})
+            _log({"stage": "model.fallback", "model": model_name or settings.aegis_model_name, "input": transformed_input, "output": model_output})
 
         # 5) post-LLM policy evaluate
         out_decision = self.policy_engine.evaluate(model_output, stage="postllm", detectors=self.detectors, context=context)
@@ -689,8 +838,8 @@ class GuardedRuntime:
 
         if out_decision.require_approval:
             h = approval_hash(stage="postllm", content=model_output, context=context)
-            if not self.store.is_approved(session_id, h):
-                self.store.add_pending_approval(session_id, h)
+            if not self._is_preapproved(session_id, h, stage="postllm", context=context):
+                self._queue_approval(session_id, h, stage="postllm", context=context)
                 combined_actions = list(dict.fromkeys(pre_actions + ["require_approval"]))
                 self._update_and_persist_risk_state(
                     session_id,
@@ -780,6 +929,7 @@ class GuardedRuntime:
             "metadata": {},
             "risk_state": risk_state,
         }
+        pack = self._apply_tenant_pack(tenant_id, environment, labels, {}, context)
 
         def _log(event: Dict[str, Any]) -> None:
             payload_event = dict(event)
@@ -854,9 +1004,11 @@ class GuardedRuntime:
 
         tool_modifier = tool_risk_modifier(tool_name)
         risk_weighted = float(pre_decision.risk_score) + float(tool_modifier)
-        force_approval = bool(risk_state.get("quarantined", False)) or risk_weighted >= float(settings.aegis_action_risk_approval_threshold)
+        approval_threshold = float(pack_threshold(pack, "action_risk_approval_threshold", float(settings.aegis_action_risk_approval_threshold)))
+        block_threshold = float(pack_threshold(pack, "action_risk_block_threshold", float(settings.aegis_action_risk_block_threshold)))
+        force_approval = bool(risk_state.get("quarantined", False)) or risk_weighted >= approval_threshold or force_approval_for_tool(pack, tool_name)
 
-        if risk_weighted >= float(settings.aegis_action_risk_block_threshold):
+        if risk_weighted >= block_threshold:
             updated = self._update_and_persist_risk_state(
                 session_id,
                 risk_state,
@@ -887,8 +1039,8 @@ class GuardedRuntime:
 
         if pre_decision.require_approval or force_approval:
             h = approval_hash(stage="tool_pre", content=f"{tool_name}:{payload}", context=context)
-            if not self.store.is_approved(session_id, h):
-                self.store.add_pending_approval(session_id, h)
+            if not self._is_preapproved(session_id, h, stage="tool_pre", context=context, tool_name=tool_name):
+                self._queue_approval(session_id, h, stage="tool_pre", context=context, tool_name=tool_name)
                 _log(
                     {
                         "stage": "tool_risk_fusion",
@@ -939,6 +1091,7 @@ class GuardedRuntime:
             "metadata": {},
             "risk_state": risk_state,
         }
+        self._apply_tenant_pack(tenant_id, environment, labels, {}, context)
 
         def _log(event: Dict[str, Any]) -> None:
             payload_event = dict(event)
@@ -947,7 +1100,7 @@ class GuardedRuntime:
             self.store.log_event(session_id, payload_event)
 
         result_dict: Any = result
-        if self._scan_tool_output_for_injection({"result": result_dict}):
+        if self._scan_tool_output_for_injection(tool_name, {"result": result_dict}):
             updated = self._update_and_persist_risk_state(
                 session_id,
                 risk_state,
@@ -1010,8 +1163,8 @@ class GuardedRuntime:
             }
         if post_decision.require_approval:
             h = approval_hash(stage="tool_post", content=wrapped, context=context)
-            if not self.store.is_approved(session_id, h):
-                self.store.add_pending_approval(session_id, h)
+            if not self._is_preapproved(session_id, h, stage="tool_post", context=context, tool_name=tool_name):
+                self._queue_approval(session_id, h, stage="tool_post", context=context, tool_name=tool_name)
                 return {
                     "allowed": False,
                     "blocked": False,
@@ -1087,6 +1240,7 @@ class GuardedRuntime:
             "metadata": {},
             "risk_state": risk_state,
         }
+        pack = self._apply_tenant_pack(tenant_id, environment, labels, {}, context)
 
         def _log(event: Dict[str, Any]) -> None:
             payload_event = dict(event)
@@ -1149,9 +1303,11 @@ class GuardedRuntime:
 
         tool_modifier = tool_risk_modifier(tool_name)
         risk_weighted = float(pre_decision.risk_score) + float(tool_modifier)
-        force_approval = bool(risk_state.get("quarantined", False)) or risk_weighted >= float(settings.aegis_action_risk_approval_threshold)
+        approval_threshold = float(pack_threshold(pack, "action_risk_approval_threshold", float(settings.aegis_action_risk_approval_threshold)))
+        block_threshold = float(pack_threshold(pack, "action_risk_block_threshold", float(settings.aegis_action_risk_block_threshold)))
+        force_approval = bool(risk_state.get("quarantined", False)) or risk_weighted >= approval_threshold or force_approval_for_tool(pack, tool_name)
 
-        if risk_weighted >= float(settings.aegis_action_risk_block_threshold):
+        if risk_weighted >= block_threshold:
             updated = self._update_and_persist_risk_state(
                 session_id,
                 risk_state,
@@ -1174,8 +1330,8 @@ class GuardedRuntime:
 
         if pre_decision.require_approval or force_approval:
             h = approval_hash(stage="tool_pre", content=f"{tool_name}:{payload}", context=context)
-            if not self.store.is_approved(session_id, h):
-                self.store.add_pending_approval(session_id, h)
+            if not self._is_preapproved(session_id, h, stage="tool_pre", context=context, tool_name=tool_name):
+                self._queue_approval(session_id, h, stage="tool_pre", context=context, tool_name=tool_name)
                 _log(
                     {
                         "stage": "tool_risk_fusion",
@@ -1218,7 +1374,7 @@ class GuardedRuntime:
                 "message": result.message,
             },
         )
-        if result.result and self._scan_tool_output_for_injection(result.result):
+        if result.result and self._scan_tool_output_for_injection(tool_name, result.result):
             updated = self._update_and_persist_risk_state(
                 session_id,
                 risk_state,
@@ -1237,6 +1393,16 @@ class GuardedRuntime:
                 },
             )
             return {"allowed": False, "message": "Tool output blocked by sanitizer", "result": None}
+
+        provenance = assess_tool_provenance(tool_name, environment, result.result)
+        _log({"stage": "tool_provenance", "tool": tool_name, "provenance": provenance})
+        if provenance["score"] < 0.3:
+            return {"allowed": False, "message": "Tool output blocked by provenance policy", "result": None}
+        if provenance["score"] < 0.55:
+            h = approval_hash(stage="tool_post", content=f"{tool_name}:provenance:{provenance['score']}", context=context)
+            if not self._is_preapproved(session_id, h, stage="tool_post", context=context, tool_name=tool_name):
+                self._queue_approval(session_id, h, stage="tool_post", context=context, tool_name=tool_name)
+                return {"allowed": False, "message": "Low-trust tool output requires approval", "result": None, "approval_hash": h}
 
         wrapped = f"{tool_name}:<UNTRUSTED_TOOL_DATA>{json.dumps(result.result, ensure_ascii=True)}</UNTRUSTED_TOOL_DATA>"
         post_decision = self.policy_engine.evaluate(
@@ -1287,8 +1453,8 @@ class GuardedRuntime:
             }
         if post_decision.require_approval:
             h = approval_hash(stage="tool_post", content=wrapped, context=context)
-            if not self.store.is_approved(session_id, h):
-                self.store.add_pending_approval(session_id, h)
+            if not self._is_preapproved(session_id, h, stage="tool_post", context=context, tool_name=tool_name):
+                self._queue_approval(session_id, h, stage="tool_post", context=context, tool_name=tool_name)
                 return {
                     "allowed": False,
                     "message": post_decision.message or "Approval required",

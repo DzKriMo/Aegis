@@ -10,11 +10,17 @@ from ..config import settings
 TOOL_RISK_PROFILE: Dict[str, Dict[str, Any]] = {
     "json_transform": {"risk_weight": 0.1, "data_sensitivity_level": 0.1, "network_exposure_level": 0.0, "destructive_flag": False},
     "http_fetch": {"risk_weight": 0.6, "data_sensitivity_level": 0.4, "network_exposure_level": 0.8, "destructive_flag": False},
-    "filesystem_read": {"risk_weight": 0.7, "data_sensitivity_level": 0.8, "network_exposure_level": 0.0, "destructive_flag": False},
+    "filesystem_read": {"risk_weight": 0.28, "data_sensitivity_level": 0.35, "network_exposure_level": 0.0, "destructive_flag": False},
+    "directory_list": {"risk_weight": 0.18, "data_sensitivity_level": 0.15, "network_exposure_level": 0.0, "destructive_flag": False},
+    "filesystem_write": {"risk_weight": 0.45, "data_sensitivity_level": 0.35, "network_exposure_level": 0.0, "destructive_flag": False},
+    "filesystem_edit": {"risk_weight": 0.42, "data_sensitivity_level": 0.35, "network_exposure_level": 0.0, "destructive_flag": False},
+    "filesystem_patch": {"risk_weight": 0.46, "data_sensitivity_level": 0.35, "network_exposure_level": 0.0, "destructive_flag": False},
+    "file_find": {"risk_weight": 0.15, "data_sensitivity_level": 0.12, "network_exposure_level": 0.0, "destructive_flag": False},
+    "text_search": {"risk_weight": 0.22, "data_sensitivity_level": 0.25, "network_exposure_level": 0.0, "destructive_flag": False},
     "shell": {"risk_weight": 1.0, "data_sensitivity_level": 0.9, "network_exposure_level": 0.9, "destructive_flag": True},
 }
 
-_HIGH_RISK_TOOLS = {"shell", "filesystem_read", "http_fetch"}
+_HIGH_RISK_TOOLS = {"shell", "http_fetch"}
 
 
 @dataclass

@@ -18,6 +18,30 @@
             "cacheRead": 0,
             "cacheWrite": 0
           },
+          "contextWindow": 16384,
+          "maxTokens": 2048,
+          "api": "openai-completions"
+        }
+      ]
+    },
+    "ollama": {
+      "baseUrl": "http://127.0.0.1:11434",
+      "apiKey": "ollama-local",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "qwen2.5:7b-instruct",
+          "name": "Ollama: qwen2.5:7b-instruct",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
           "contextWindow": 32768,
           "maxTokens": 2048,
           "api": "openai-completions"

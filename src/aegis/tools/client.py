@@ -8,16 +8,40 @@ class AegisClient:
     def __init__(self, base_url: str, api_key: str):
         self.base_url = base_url.rstrip("/")
         self.headers = {"x-api-key": api_key}
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
 
     def create_session(self) -> str:
-        r = requests.post(f"{self.base_url}/sessions", headers=self.headers, timeout=10)
+        r = self.session.post(f"{self.base_url}/sessions", timeout=10)
         r.raise_for_status()
         return r.json()["session_id"]
+
+    def approve(
+        self,
+        session_id: str,
+        approval_hash: str,
+        actor: str = "agent",
+        scope: str = "exact",
+        expires_in_seconds: int = 3600,
+        reusable: bool = True,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload = {
+            "approval_hash": approval_hash,
+            "actor": actor,
+            "scope": scope,
+            "expires_in_seconds": expires_in_seconds,
+            "reusable": reusable,
+            "reason": reason,
+        }
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/approvals/decision", json=payload, timeout=30)
+        r.raise_for_status()
+        return r.json()
 
     def send_message(self, session_id: str, content: str, **kwargs) -> Dict[str, Any]:
         payload = {"content": content}
         payload.update(kwargs)
-        r = requests.post(f"{self.base_url}/sessions/{session_id}/messages", json=payload, headers=self.headers, timeout=30)
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/messages", json=payload, timeout=30)
         r.raise_for_status()
         return r.json()
 
@@ -41,6 +65,30 @@ class AegisClient:
             "filesystem_root": filesystem_root,
         }
         body.update(kwargs)
-        r = requests.post(f"{self.base_url}/sessions/{session_id}/tools/execute", json=body, headers=self.headers, timeout=30)
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/tools/execute", json=body, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    def guard_input(self, session_id: str, content: str, **kwargs) -> Dict[str, Any]:
+        payload = {"content": content}
+        payload.update(kwargs)
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/guard/input", json=payload, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    def guard_output(self, session_id: str, content: str, **kwargs) -> Dict[str, Any]:
+        payload = {"content": content}
+        payload.update(kwargs)
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/guard/output", json=payload, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    def get_risk(self, session_id: str) -> Dict[str, Any]:
+        r = self.session.get(f"{self.base_url}/sessions/{session_id}/risk", timeout=15)
+        r.raise_for_status()
+        return r.json()
+
+    def reset_risk(self, session_id: str) -> Dict[str, Any]:
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/risk/reset", timeout=15)
         r.raise_for_status()
         return r.json()

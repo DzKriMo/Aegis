@@ -84,14 +84,14 @@ def _extract_json(text: str) -> Dict[str, Any] | None:
         return None
 
 
-def classify_text(text: str) -> Dict[str, Any]:
+def classify_text(text: str, model_name: str | None = None) -> Dict[str, Any]:
     if not settings.aegis_llm_enabled:
         result = _empty_result()
         result["__error__"] = "llm_disabled"
         return result
 
     payload: Dict[str, Any] = {
-        "model": settings.aegis_llm_model,
+        "model": model_name or settings.aegis_llm_model,
         "temperature": 0.0,
         "max_tokens": 260,
         "messages": [

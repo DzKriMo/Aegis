@@ -188,6 +188,15 @@ def _looks_like_pan(value: str) -> bool:
     return total % 10 == 0
 
 
+def _is_trusted_local_summary(context: Dict) -> bool:
+    metadata = context.get("metadata") or {}
+    return (
+        bool(metadata.get("summary_mode"))
+        and str(metadata.get("tool_trust") or "").strip().lower() == "high"
+        and str(metadata.get("derived_from_tool") or "").strip() in {"filesystem_read", "directory_list"}
+    )
+
+
 def _has_direct_sensitive_exfil_request(text: str) -> bool:
     # Treat quoted/example-driven research phrasing as non-imperative by default.
     if RESEARCH_CONTEXT.search(text) and re.search(r"\b(example|for example|like)\b", text, re.IGNORECASE) and not LEAK_VERBS.search(text):
@@ -283,7 +292,10 @@ def detect_pii(text: str, context: Dict) -> bool:
 
 def detect_secrets(text: str, context: Dict) -> bool:
     llm = context.get("llm_classification", {})
-    return _match_any(SECRET_PATTERNS, text) or bool(llm.get("secrets", False))
+    lexical_match = _match_any(SECRET_PATTERNS, text)
+    if _is_trusted_local_summary(context):
+        return lexical_match
+    return lexical_match or bool(llm.get("secrets", False))
 
 
 def detect_policy_violation(text: str, context: Dict) -> bool:
@@ -327,8 +339,12 @@ def detect_exfiltration(text: str, context: Dict) -> bool:
     if _is_fictional_context(text):
         return False
 
+    lexical_match = _match_any(EXFIL_PATTERNS, text) or _contains_obfuscated_attack(text)
+    if _is_trusted_local_summary(context):
+        return lexical_match
+
     llm = context.get("llm_classification", {})
-    return _match_any(EXFIL_PATTERNS, text) or _contains_obfuscated_attack(text) or matcher.match("exfiltration", text) or bool(llm.get("exfiltration", False))
+    return lexical_match or matcher.match("exfiltration", text) or bool(llm.get("exfiltration", False))
 
 
 def detect_goal_hijack(text: str, context: Dict) -> bool:
