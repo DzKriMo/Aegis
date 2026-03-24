@@ -55,6 +55,7 @@ _PACK_BINDINGS: Dict[str, str] = {
 }
 
 _CONTROL_STATE: Dict[str, Any] = {
+    "guardrails_enabled": True,
     "consensus_enabled": True,
     "verifier_model": "",
     "consensus_disagreement_threshold": 1,

@@ -50,5 +50,26 @@ class GuardedTools:
     def http_fetch(self, url: str, method: str = "GET") -> Dict[str, Any]:
         return self.adapter.run_tool("http_fetch", {"url": url, "method": method})
 
+    def web_search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
+        return self.adapter.run_tool("web_search", {"query": query, "max_results": max_results})
+
+    def web_open(self, url: str, max_links: int = 12) -> Dict[str, Any]:
+        return self.adapter.run_tool("web_open", {"url": url, "max_links": max_links})
+
+    def browser_navigate(self, url: str) -> Dict[str, Any]:
+        return self.adapter.run_tool("browser_navigate", {"url": url})
+
+    def browser_click(self, selector: str) -> Dict[str, Any]:
+        return self.adapter.run_tool("browser_click", {"selector": selector})
+
+    def browser_type(self, selector: str, text: str, submit: bool = False) -> Dict[str, Any]:
+        return self.adapter.run_tool("browser_type", {"selector": selector, "text": text, "submit": submit})
+
+    def browser_snapshot(self) -> Dict[str, Any]:
+        return self.adapter.run_tool("browser_snapshot", {})
+
+    def browser_screenshot(self) -> Dict[str, Any]:
+        return self.adapter.run_tool("browser_screenshot", {})
+
     def json_transform(self, data: Any, operation: str = "pretty") -> Dict[str, Any]:
         return self.adapter.run_tool("json_transform", {"data": data, "operation": operation})

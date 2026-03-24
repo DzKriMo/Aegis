@@ -10,6 +10,8 @@ class AegisClient:
         self.headers = {"x-api-key": api_key}
         self.session = requests.Session()
         self.session.headers.update(self.headers)
+        self.timeout_short = 30
+        self.timeout_long = 120
 
     def create_session(self) -> str:
         r = self.session.post(f"{self.base_url}/sessions", timeout=10)
@@ -34,14 +36,14 @@ class AegisClient:
             "reusable": reusable,
             "reason": reason,
         }
-        r = self.session.post(f"{self.base_url}/sessions/{session_id}/approvals/decision", json=payload, timeout=30)
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/approvals/decision", json=payload, timeout=self.timeout_short)
         r.raise_for_status()
         return r.json()
 
     def send_message(self, session_id: str, content: str, **kwargs) -> Dict[str, Any]:
         payload = {"content": content}
         payload.update(kwargs)
-        r = self.session.post(f"{self.base_url}/sessions/{session_id}/messages", json=payload, timeout=30)
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/messages", json=payload, timeout=self.timeout_long)
         r.raise_for_status()
         return r.json()
 
@@ -65,30 +67,30 @@ class AegisClient:
             "filesystem_root": filesystem_root,
         }
         body.update(kwargs)
-        r = self.session.post(f"{self.base_url}/sessions/{session_id}/tools/execute", json=body, timeout=30)
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/tools/execute", json=body, timeout=self.timeout_long)
         r.raise_for_status()
         return r.json()
 
     def guard_input(self, session_id: str, content: str, **kwargs) -> Dict[str, Any]:
         payload = {"content": content}
         payload.update(kwargs)
-        r = self.session.post(f"{self.base_url}/sessions/{session_id}/guard/input", json=payload, timeout=30)
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/guard/input", json=payload, timeout=self.timeout_long)
         r.raise_for_status()
         return r.json()
 
     def guard_output(self, session_id: str, content: str, **kwargs) -> Dict[str, Any]:
         payload = {"content": content}
         payload.update(kwargs)
-        r = self.session.post(f"{self.base_url}/sessions/{session_id}/guard/output", json=payload, timeout=30)
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/guard/output", json=payload, timeout=self.timeout_long)
         r.raise_for_status()
         return r.json()
 
     def get_risk(self, session_id: str) -> Dict[str, Any]:
-        r = self.session.get(f"{self.base_url}/sessions/{session_id}/risk", timeout=15)
+        r = self.session.get(f"{self.base_url}/sessions/{session_id}/risk", timeout=self.timeout_short)
         r.raise_for_status()
         return r.json()
 
     def reset_risk(self, session_id: str) -> Dict[str, Any]:
-        r = self.session.post(f"{self.base_url}/sessions/{session_id}/risk/reset", timeout=15)
+        r = self.session.post(f"{self.base_url}/sessions/{session_id}/risk/reset", timeout=self.timeout_short)
         r.raise_for_status()
         return r.json()

@@ -19,7 +19,7 @@
             <line x1="3" y1="18" x2="21" y2="18"></line>
           </svg>
         </button>
-        <div class="logo">A</div>
+        <div class="logo"><img src="../../../logo.png" alt="Aegis Logo" /></div>
         <div class="brand-text">
           <strong>Aegis</strong>
           <div class="subtitle">Guardrail dashboard</div>
@@ -270,8 +270,15 @@
               <div class="tab-panel active" data-panel="runtime">
                 <div class="form-grid">
                   <div class="form-field">
+                    <label>Aegis Guardrails</label>
+                    <label class="toggle-row">
+                      <input id="guardrailsEnabled" type="checkbox" checked />
+                      <span>Enabled</span>
+                    </label>
+                  </div>
+                  <div class="form-field">
                     <label>Ollama Model</label>
-                    <select id="modelSelect" class="select">
+                    <select id="modelSelect" class="select" onchange="saveSelectedModel()">
                       <option value="">Loading models...</option>
                     </select>
                   </div>

@@ -18,11 +18,13 @@ from ..services.ollama import list_ollama_models, ollama_base_url
 from ..services.control_plane import get_control_settings, get_tenant_packs, update_control_settings, update_tenant_packs
 from ..services.redteam import run_redteam_suite
 from ..policies.engine import PolicyEngine
+from ..agent.krimo_service import AgentMemory, LocalAegisClient, run_turn
 
 router = APIRouter()
 
 store = DbStore() if settings.aegis_db_enabled else InMemoryStore()
 runtime = GuardedRuntime(store=store)
+agent_memories: Dict[str, AgentMemory] = {}
 
 class CreateSessionResponse(BaseModel):
     session_id: str
@@ -187,6 +189,26 @@ class RedTeamRunRequest(BaseModel):
     dataset_path: Optional[str] = None
 
 
+class KrimoAgentRequest(BaseModel):
+    content: str
+    session_id: Optional[str] = None
+    mode: str = "chat"
+    remember: Optional[str] = None
+
+
+class KrimoAgentResponse(BaseModel):
+    ok: bool
+    session_id: str
+    mode: str
+    model: Optional[str] = None
+    content: Optional[str] = None
+    blocked: bool = False
+    require_approval: bool = False
+    message: Optional[str] = None
+    approval_hash: Optional[str] = None
+    memory: Dict[str, Any] = Field(default_factory=dict)
+
+
 def _decision_from_actions(actions: List[str]) -> str:
     s = set(actions or [])
     if "block" in s:
@@ -225,6 +247,45 @@ def create_session():
     session_id = str(uuid4())
     store.create_session(session_id)
     return CreateSessionResponse(session_id=session_id)
+
+
+@router.post("/agent/krimo", response_model=KrimoAgentResponse, dependencies=[Depends(require_api_key)])
+def krimo_agent(req: KrimoAgentRequest):
+    session_id = req.session_id or str(uuid4())
+    if not store.session_exists(session_id):
+        store.create_session(session_id)
+    updater = getattr(store, "update_session_title", None)
+    if callable(updater) and req.content:
+        updater(session_id, _derive_session_title(req.content))
+
+    memory = agent_memories.get(session_id) or AgentMemory()
+    if req.remember:
+        memory.remember_note(req.remember)
+
+    client = LocalAegisClient(runtime)
+    result = run_turn(client=client, session_id=session_id, content=req.content, memory=memory, mode=req.mode)
+    agent_memories[session_id] = memory
+
+    if result.get("ok"):
+        return KrimoAgentResponse(
+            ok=True,
+            session_id=session_id,
+            mode=str(result.get("mode") or req.mode),
+            model=result.get("model"),
+            content=result.get("content"),
+            memory=result.get("memory") or memory.as_dict(),
+        )
+    return KrimoAgentResponse(
+        ok=False,
+        session_id=session_id,
+        mode=req.mode,
+        model=result.get("model"),
+        blocked=bool(result.get("blocked", False)),
+        require_approval=bool(result.get("require_approval", False)),
+        message=result.get("message"),
+        approval_hash=result.get("approval_hash"),
+        memory=result.get("memory") or memory.as_dict(),
+    )
 
 @router.get("/sessions", dependencies=[Depends(require_api_key)])
 def list_sessions():

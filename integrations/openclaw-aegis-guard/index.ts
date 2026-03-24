@@ -18,6 +18,8 @@ const plugin = {
     }
 
     const sessionMap = new Map<string, string>();
+    const pendingOverrides = new Map<string, string>();
+    const externallyHandled = new Set<string>();
 
     async function postJson(path: string, body: Record<string, unknown>): Promise<any> {
       const res = await fetch(`${aegisUrl}${path}`, {
@@ -27,6 +29,20 @@ const plugin = {
           "content-type": "application/json",
         },
         body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Aegis ${path} failed (${res.status}): ${txt.slice(0, 300)}`);
+      }
+      return await res.json();
+    }
+
+    async function getJson(path: string): Promise<any> {
+      const res = await fetch(`${aegisUrl}${path}`, {
+        method: "GET",
+        headers: {
+          "x-api-key": apiKey,
+        },
       });
       if (!res.ok) {
         const txt = await res.text();
@@ -153,6 +169,289 @@ const plugin = {
       return `msg:${channel}:${account}:${conv}`;
     }
 
+    function commandSessionKey(ctx: any): string {
+      const channel = String(ctx?.channelId || ctx?.channel || "unknown");
+      const account = String(ctx?.accountId || "default");
+      const peer = String(ctx?.to || ctx?.from || "default");
+      const thread = ctx?.messageThreadId != null ? String(ctx.messageThreadId) : "default";
+      return `cmd:${channel}:${account}:${peer}:${thread}`;
+    }
+
+    function overrideKeys(event: any, ctx: any): string[] {
+      const keys = new Set<string>();
+      keys.add(`llm:${llmSessionKey(event, ctx)}`);
+      keys.add(messageSessionKey(ctx));
+      keys.add(toolSessionKey(ctx));
+      if (event?.runId) keys.add(`run:${String(event.runId)}`);
+      if (event?.sessionId) keys.add(`sid:${String(event.sessionId)}`);
+      return Array.from(keys).filter((v) => v.trim().length > 0);
+    }
+
+    function bindSessionId(sessionId: string, event: any, ctx: any): void {
+      for (const key of overrideKeys(event, ctx)) {
+        sessionMap.set(key, sessionId);
+      }
+    }
+
+    function bindCommandSessionId(sessionId: string, ctx: any): void {
+      sessionMap.set(commandSessionKey(ctx), sessionId);
+    }
+
+    function markExternallyHandled(event: any, ctx: any): void {
+      for (const key of overrideKeys(event, ctx)) {
+        externallyHandled.add(key);
+      }
+    }
+
+    function clearExternallyHandled(event: any, ctx: any): void {
+      for (const key of overrideKeys(event, ctx)) {
+        externallyHandled.delete(key);
+      }
+    }
+
+    function isExternallyHandled(event: any, ctx: any): boolean {
+      for (const key of overrideKeys(event, ctx)) {
+        if (externallyHandled.has(key)) return true;
+      }
+      return false;
+    }
+
+    function setPendingOverride(event: any, ctx: any, value: string): void {
+      for (const key of overrideKeys(event, ctx)) {
+        pendingOverrides.set(key, value);
+      }
+      markExternallyHandled(event, ctx);
+    }
+
+    function takePendingOverride(event: any, ctx: any): string | undefined {
+      for (const key of overrideKeys(event, ctx)) {
+        const value = pendingOverrides.get(key);
+        if (typeof value === "string") {
+          for (const k of overrideKeys(event, ctx)) {
+            pendingOverrides.delete(k);
+          }
+          clearExternallyHandled(event, ctx);
+          return value;
+        }
+      }
+      return undefined;
+    }
+
+    function isFastToolPrompt(prompt: string): boolean {
+      const p = String(prompt || "").trim();
+      return /^(pwd|ls(?:\s|$)|dir(?:\s|$)|read\s+|cat\s+|show\s+|open\s+|rg\s+|grep\s+|search\s+|find\s+|glob\s+|replace\s+|patch\s+|tree(?:\s|$)|repo map(?:\s|$)|summari[sz]e code\s+|explain code\s+)/i.test(p);
+    }
+
+    function extractTextContent(value: unknown): string {
+      if (typeof value === "string") {
+        return value;
+      }
+      if (Array.isArray(value)) {
+        return value.map((item) => extractTextContent(item)).filter(Boolean).join("\n");
+      }
+      if (value && typeof value === "object") {
+        const obj = value as Record<string, unknown>;
+        if (typeof obj.text === "string") {
+          return obj.text;
+        }
+        if (typeof obj.content === "string") {
+          return obj.content;
+        }
+        if (Array.isArray(obj.content)) {
+          return extractTextContent(obj.content);
+        }
+        if (typeof obj.value === "string") {
+          return obj.value;
+        }
+      }
+      return "";
+    }
+
+    function extractLatestUserMessage(messages: unknown): string {
+      if (!Array.isArray(messages)) {
+        return "";
+      }
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const item = messages[i];
+        if (!item || typeof item !== "object") continue;
+        const msg = item as Record<string, unknown>;
+        const role = String(msg.role || msg.type || "").toLowerCase();
+        if (role !== "user") continue;
+        const text = extractTextContent(msg.content);
+        if (text.trim()) {
+          return text.trim();
+        }
+      }
+      return "";
+    }
+
+    function isSessionStartupPrompt(prompt: string): boolean {
+      const p = String(prompt || "").trim();
+      return /^A new session was started via \/new or \/reset\./i.test(p);
+    }
+
+    async function callKrimo(sessionId: string, content: string, mode = "chat"): Promise<any> {
+      return await postJson("/agent/krimo", {
+        session_id: sessionId,
+        content,
+        mode,
+      });
+    }
+
+    async function getCommandSessionId(ctx: any): Promise<string> {
+      return await getSessionId(commandSessionKey(ctx));
+    }
+
+    async function maybeHandleInlineCommand(prompt: string, event: any, ctx: any): Promise<any | undefined> {
+      const trimmed = String(prompt || "").trim();
+      if (!trimmed) return undefined;
+      const key = `llm:${llmSessionKey(event, ctx)}`;
+
+      if (trimmed === "/new") {
+        const created = await postJson("/sessions", {});
+        const sid = String(created?.session_id || "");
+        if (sid) {
+          bindSessionId(sid, event, ctx);
+          setPendingOverride(event, ctx, `[aegis] session=${sid}`);
+        }
+        return {
+          systemPrompt: "Reply briefly.",
+          prependContext: "The session reset command was handled externally.",
+        };
+      }
+
+      if (trimmed.startsWith("/attach ")) {
+        const sid = trimmed.slice("/attach ".length).trim();
+        if (sid) {
+          bindSessionId(sid, event, ctx);
+          setPendingOverride(event, ctx, `[aegis] attached session=${sid}`);
+        } else {
+          setPendingOverride(event, ctx, "[agent] usage: /attach <session_id>");
+        }
+        return {
+          systemPrompt: "Reply briefly.",
+          prependContext: "The session attach command was handled externally.",
+        };
+      }
+
+      const sid = await getSessionId(key);
+
+      if (trimmed === "/session") {
+        bindSessionId(sid, event, ctx);
+        setPendingOverride(event, ctx, `[aegis] session=${sid}`);
+        return {
+          systemPrompt: "Reply briefly.",
+          prependContext: "The session query was handled externally.",
+        };
+      }
+
+      if (trimmed === "/risk") {
+        const risk = await getJson(`/sessions/${sid}/risk`);
+        const state = risk?.risk_state || {};
+        bindSessionId(sid, event, ctx);
+        setPendingOverride(
+          event,
+          ctx,
+          `[aegis] quarantined=${Boolean(state.quarantined)} cumulative=${Number(state.cumulative_risk_score || 0).toFixed(3)} injections=${Number(state.injection_attempt_count || 0)} sensitive_tools=${Number(state.sensitive_tool_attempts || 0)} goal_drift=${Number(state.goal_drift_score || 0).toFixed(3)}`,
+        );
+        return {
+          systemPrompt: "Reply briefly.",
+          prependContext: "The risk query was handled externally.",
+        };
+      }
+
+      if (trimmed === "/resetrisk") {
+        const risk = await postJson(`/sessions/${sid}/risk/reset`, {});
+        const state = risk?.risk_state || {};
+        bindSessionId(sid, event, ctx);
+        setPendingOverride(
+          event,
+          ctx,
+          `[aegis] risk reset quarantined=${Boolean(state.quarantined)} cumulative=${Number(state.cumulative_risk_score || 0).toFixed(3)}`,
+        );
+        return {
+          systemPrompt: "Reply briefly.",
+          prependContext: "The risk reset command was handled externally.",
+        };
+      }
+
+      if (isFastToolPrompt(trimmed)) {
+        const result = await callKrimo(sid, trimmed, "chat");
+        bindSessionId(sid, event, ctx);
+        if (result?.ok) {
+          setPendingOverride(event, ctx, String(result.content || ""));
+        } else if (result?.require_approval) {
+          setPendingOverride(event, ctx, `[aegis] approval required: ${String(result.message || "Approval required")} (approval_hash=${String(result.approval_hash || "")})`);
+        } else if (result?.blocked) {
+          setPendingOverride(event, ctx, `Tool blocked by Aegis: ${String(result.message || "Blocked")}`);
+        } else {
+          setPendingOverride(event, ctx, String(result?.message || "No result."));
+        }
+        return {
+          systemPrompt: "Reply briefly.",
+          prependContext: "The tool-style request was handled externally.",
+        };
+      }
+
+      return undefined;
+    }
+
+    api.registerCommand({
+      name: "risk",
+      description: "Show the Aegis risk state for this conversation.",
+      handler: async (ctx: any) => {
+        const sid = await getCommandSessionId(ctx);
+        bindCommandSessionId(sid, ctx);
+        const risk = await getJson(`/sessions/${sid}/risk`);
+        const state = risk?.risk_state || {};
+        return {
+          text:
+            `[aegis] session=${sid}\n` +
+            `quarantined=${Boolean(state.quarantined)} cumulative=${Number(state.cumulative_risk_score || 0).toFixed(3)} ` +
+            `injections=${Number(state.injection_attempt_count || 0)} sensitive_tools=${Number(state.sensitive_tool_attempts || 0)} ` +
+            `goal_drift=${Number(state.goal_drift_score || 0).toFixed(3)}`,
+        };
+      },
+    });
+
+    api.registerCommand({
+      name: "resetrisk",
+      description: "Reset the Aegis risk state for this conversation.",
+      handler: async (ctx: any) => {
+        const sid = await getCommandSessionId(ctx);
+        bindCommandSessionId(sid, ctx);
+        const risk = await postJson(`/sessions/${sid}/risk/reset`, {});
+        const state = risk?.risk_state || {};
+        return {
+          text:
+            `[aegis] session=${sid}\n` +
+            `risk reset quarantined=${Boolean(state.quarantined)} cumulative=${Number(state.cumulative_risk_score || 0).toFixed(3)}`,
+        };
+      },
+    });
+
+    api.registerCommand({
+      name: "aegis-session",
+      description: "Show the bound Aegis session id for this conversation.",
+      handler: async (ctx: any) => {
+        const sid = await getCommandSessionId(ctx);
+        bindCommandSessionId(sid, ctx);
+        return { text: `[aegis] session=${sid}` };
+      },
+    });
+
+    api.on("before_reset", async (_event: any, ctx: any) => {
+      try {
+        const created = await postJson("/sessions", {});
+        const sid = String(created?.session_id || "");
+        if (!sid) return;
+        bindSessionId(sid, { sessionId: sid, runId: sid }, ctx);
+        api.logger.info(`[aegis-guard] bound fresh Aegis session on reset: ${sid}`);
+      } catch (err) {
+        api.logger.warn(`[aegis-guard] before_reset failed: ${String(err)}`);
+      }
+    });
+
     api.on("before_tool_call", async (event: any, ctx: any) => {
       const key = toolSessionKey(ctx);
       const sid = await getSessionId(key);
@@ -206,6 +505,18 @@ const plugin = {
       if (!enforceInputGate) return undefined;
       try {
         const prompt = String(event?.prompt || "");
+        const latestUserMessage = extractLatestUserMessage(event?.messages);
+        const inlinePrompt =
+          latestUserMessage && (isFastToolPrompt(latestUserMessage) || latestUserMessage.startsWith("/"))
+            ? latestUserMessage
+            : prompt;
+        const special = await maybeHandleInlineCommand(inlinePrompt, event, ctx);
+        if (special) {
+          return special;
+        }
+        if (isSessionStartupPrompt(prompt)) {
+          return undefined;
+        }
         const localInput = localGuardInput(prompt);
         if (localInput.blocked) {
           return {
@@ -266,11 +577,13 @@ const plugin = {
 
     api.on("llm_input", async (event: any, ctx: any) => {
       if (!observeLlmIo) return;
+      if (isExternallyHandled(event, ctx)) return;
       try {
         const key = `llm:${llmSessionKey(event, ctx)}`;
         const sid = await getSessionId(key);
         const content = String(event?.prompt || "");
         if (!content.trim()) return;
+        if (isSessionStartupPrompt(content)) return;
         const result = await postJson(`/sessions/${sid}/guard/input`, {
           content,
           metadata: {
@@ -302,6 +615,12 @@ const plugin = {
       if (!observeLlmIo) return;
       try {
         const assistantTexts = Array.isArray(event?.assistantTexts) ? event.assistantTexts : [];
+        const override = takePendingOverride(event, ctx);
+        if (typeof override === "string") {
+          assistantTexts.splice(0, assistantTexts.length, override);
+          return;
+        }
+        const key = `llm:${llmSessionKey(event, ctx)}`;
         const originalContent = assistantTexts
           .map((v: unknown) => String(v ?? ""))
           .filter((v: string) => v.trim().length > 0)
@@ -322,7 +641,6 @@ const plugin = {
           .join("\n\n");
         if (!content.trim()) return;
 
-        const key = `llm:${llmSessionKey(event, ctx)}`;
         const sid = await getSessionId(key);
         const result = await postJson(`/sessions/${sid}/guard/output`, {
           content,
@@ -354,6 +672,10 @@ const plugin = {
 
     api.on("message_sending", async (event: any, ctx: any) => {
       if (!guardOutboundMessages) return undefined;
+      const override = takePendingOverride(event, ctx);
+      if (typeof override === "string") {
+        return { content: override };
+      }
       const originalContent = String(event?.content || "");
       const localOutput = localGuardOutput(originalContent);
       if (localOutput.blocked) {

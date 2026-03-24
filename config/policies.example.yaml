@@ -1,12 +1,12 @@
 policies:
-- id: block_ml_block_intent
+- id: warn_ml_block_intent
   stage: prellm
   match:
     any:
     - detector: ml_block_intent
-  action: block
-  message: Local classifier flagged high-confidence block intent
-  risk: 0.9
+  action: warn
+  message: Local classifier flagged suspicious intent
+  risk: 0.35
 
 - id: warn_ml_warn_intent
   stage: prellm

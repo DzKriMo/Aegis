@@ -16,6 +16,13 @@ def assess_tool_provenance(tool_name: str, environment: str | None, result: Any)
         "text_search": 0.9,
         "shell": 0.58,
         "http_fetch": 0.42,
+        "web_search": 0.62,
+        "web_open": 0.58,
+        "browser_navigate": 0.6,
+        "browser_click": 0.58,
+        "browser_type": 0.56,
+        "browser_snapshot": 0.58,
+        "browser_screenshot": 0.6,
     }
     score = float(score_map.get(tool_name, 0.5))
     reasons = [f"base:{tool_name}"]

@@ -344,11 +344,13 @@ function renderControlSettings(data) {
   const approval = document.getElementById('approvalThreshold');
   const block = document.getElementById('blockThreshold');
   const state = document.getElementById('controlState');
+  const guardrailsSwitch = document.getElementById('guardrailsEnabled');
   if (profile) profile.value = controlSettings.guardrail_profile || 'balanced';
   if (verifier && controlSettings.verifier_model) verifier.value = controlSettings.verifier_model;
   if (approval) approval.value = String(controlSettings.action_risk_approval_threshold ?? '');
   if (block) block.value = String(controlSettings.action_risk_block_threshold ?? '');
-  if (state) state.textContent = `Consensus ${controlSettings.consensus_enabled ? 'enabled' : 'disabled'} • verifier ${controlSettings.verifier_model || 'none'} • approval TTL ${controlSettings.approval_default_ttl_seconds || 0}s`;
+  if (guardrailsSwitch) guardrailsSwitch.checked = Boolean(controlSettings.guardrails_enabled !== false);
+  if (state) state.textContent = `Aegis ${controlSettings.guardrails_enabled === false ? 'disabled' : 'enabled'} • Consensus ${controlSettings.consensus_enabled ? 'enabled' : 'disabled'} • verifier ${controlSettings.verifier_model || 'none'} • approval TTL ${controlSettings.approval_default_ttl_seconds || 0}s`;
 }
 
 async function loadControlSettings() {
@@ -362,13 +364,23 @@ async function loadControlSettings() {
 }
 
 async function saveControlSettings() {
+  const selectedModel = (document.getElementById('modelSelect')?.value || '').trim();
+  if (selectedModel) {
+    localStorage.setItem('aegis_selected_model', selectedModel);
+    await api('/models/active', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: selectedModel, update_classifier: true }),
+    });
+  }
   const patch = {
+    guardrails_enabled: Boolean(document.getElementById('guardrailsEnabled').checked),
     guardrail_profile: document.getElementById('profileSelect').value,
     verifier_model: document.getElementById('verifierModelSelect').value || '',
     action_risk_approval_threshold: Number(document.getElementById('approvalThreshold').value || 0.75),
     action_risk_block_threshold: Number(document.getElementById('blockThreshold').value || 1.1),
-    active_model: getSelectedModel() || null,
-    classifier_model: getSelectedModel() || null,
+    active_model: selectedModel || null,
+    classifier_model: selectedModel || null,
     consensus_enabled: Boolean(document.getElementById('verifierModelSelect').value),
   };
   const data = await api('/control/settings', {
@@ -377,6 +389,7 @@ async function saveControlSettings() {
     body: JSON.stringify({ patch }),
   });
   renderControlSettings(data);
+  await loadOllamaModels();
 }
 
 function updateTenantPackMeta() {

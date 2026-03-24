@@ -34,10 +34,18 @@ def generate_text(prompt_text: str, model_name: str | None = None) -> str:
             {"role": "user", "content": prompt_text},
         ],
     }
-    with httpx.Client(timeout=settings.aegis_model_timeout) as client:
-        resp = client.post(settings.aegis_model_endpoint, json=payload)
-        resp.raise_for_status()
-        text = _extract_content(resp.json()).strip()
-        if text:
-            return text
-        raise RuntimeError("Model returned empty content")
+    timeout = httpx.Timeout(connect=5.0, read=float(settings.aegis_model_timeout), write=30.0, pool=5.0)
+    with httpx.Client(timeout=timeout) as client:
+        last_exc: Exception | None = None
+        for _attempt in range(2):
+            try:
+                resp = client.post(settings.aegis_model_endpoint, json=payload)
+                resp.raise_for_status()
+                text = _extract_content(resp.json()).strip()
+                if text:
+                    return text
+                raise RuntimeError("Model returned empty content")
+            except httpx.ReadTimeout as exc:
+                last_exc = exc
+                continue
+        raise last_exc or RuntimeError("Model generation timed out")

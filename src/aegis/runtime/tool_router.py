@@ -5,15 +5,25 @@ from typing import Any, Dict, Optional, List
 import os
 import subprocess
 import json
+import html
 import shutil
 import re
 import fnmatch
 from pathlib import Path
-from urllib.parse import urlparse
+from html.parser import HTMLParser
+from urllib.parse import urlparse, parse_qs, urlencode, urljoin
 
 from .tools import guard_tool_call, guard_shell_command, guard_filesystem_path
 from ..prellm.network import evaluate_urls
 from .tool_registry import get_tool_policy
+from ..services.browser_session import (
+    browser_available,
+    browser_navigate,
+    browser_click,
+    browser_type,
+    browser_snapshot,
+    browser_screenshot,
+)
 
 _IGNORED_DIRS = {
     ".git",
@@ -27,6 +37,48 @@ _IGNORED_DIRS = {
     ".idea",
     ".vscode",
 }
+
+
+class _HTMLSummaryParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.title = ""
+        self._in_title = False
+        self._skip_depth = 0
+        self.text_parts: list[str] = []
+        self.links: list[dict[str, str]] = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = (tag or "").lower()
+        attr_map = {str(k).lower(): str(v) for k, v in attrs}
+        if tag == "title":
+            self._in_title = True
+        if tag in {"script", "style", "noscript"}:
+            self._skip_depth += 1
+        if tag == "a":
+            self.links.append({"href": attr_map.get("href", "").strip(), "text": attr_map.get("title", "").strip()})
+
+    def handle_endtag(self, tag):
+        tag = (tag or "").lower()
+        if tag == "title":
+            self._in_title = False
+        if tag in {"script", "style", "noscript"} and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if not data or self._skip_depth:
+            return
+        value = re.sub(r"\s+", " ", str(data)).strip()
+        if not value:
+            return
+        if self._in_title and not self.title:
+            self.title = value[:300]
+            return
+        self.text_parts.append(value)
+        if self.links:
+            last = self.links[-1]
+            if not last.get("text"):
+                last["text"] = value[:240]
 
 
 @dataclass
@@ -56,6 +108,77 @@ def _truncate_text(text: str, max_bytes: Optional[int]) -> str:
         return text
     encoded = text.encode("utf-8", errors="replace")
     return encoded[:max_bytes].decode("utf-8", errors="replace")
+
+
+def _normalize_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _is_http_url(value: str) -> bool:
+    parsed = urlparse(str(value or ""))
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _safe_fetch_text(url: str, method: str, headers: Dict[str, str], timeout_seconds: int, max_bytes: Optional[int]) -> tuple[int, Dict[str, str], str]:
+    import urllib.request
+
+    req = urllib.request.Request(url, method=method, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+        body = resp.read(max_bytes or 64 * 1024)
+        text_body = body.decode("utf-8", errors="replace")
+        return int(getattr(resp, "status", 200)), dict(resp.headers), text_body
+
+
+def _extract_search_result_url(raw_href: str) -> str:
+    href = html.unescape(str(raw_href or "").strip())
+    if not href:
+        return ""
+    if href.startswith("//"):
+        return "https:" + href
+    if href.startswith("/l/?") or href.startswith("https://duckduckgo.com/l/?") or href.startswith("http://duckduckgo.com/l/?"):
+        parsed = urlparse(href if href.startswith("http") else "https://duckduckgo.com" + href)
+        target = parse_qs(parsed.query).get("uddg", [""])[0]
+        return html.unescape(target) or href
+    return href
+
+
+def _parse_search_results(html_text: str, max_results: int) -> list[Dict[str, str]]:
+    results: list[Dict[str, str]] = []
+    pattern = re.compile(
+        r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>(.*?)(?=<a[^>]+class="[^"]*result__a|\Z)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(html_text):
+        href = _extract_search_result_url(match.group(1))
+        if not _is_http_url(href):
+            continue
+        title = _normalize_whitespace(html.unescape(re.sub(r"<[^>]+>", " ", match.group(2))))
+        block = match.group(3) or ""
+        snippet_match = re.search(r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>', block, re.IGNORECASE | re.DOTALL)
+        snippet_raw = snippet_match.group(1) if snippet_match and snippet_match.group(1) is not None else (snippet_match.group(2) if snippet_match else "")
+        snippet = _normalize_whitespace(html.unescape(re.sub(r"<[^>]+>", " ", snippet_raw)))
+        results.append({"title": title or href, "url": href, "snippet": snippet})
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def _extract_page_summary(url: str, html_text: str, max_links: int) -> Dict[str, Any]:
+    parser = _HTMLSummaryParser()
+    parser.feed(html_text)
+    title = _normalize_whitespace(parser.title)
+    text = _normalize_whitespace(" ".join(parser.text_parts))
+    links: list[Dict[str, str]] = []
+    seen: set[str] = set()
+    for item in parser.links:
+        href = urljoin(url, item.get("href") or "")
+        if not _is_http_url(href) or href in seen:
+            continue
+        seen.add(href)
+        links.append({"url": href, "text": _normalize_whitespace(item.get("text") or href)[:240]})
+        if len(links) >= max_links:
+            break
+    return {"title": title, "text_preview": _truncate_text(text, 2400), "links": links}
 
 
 def _iter_text_files(root: str):
@@ -108,6 +231,7 @@ def execute_tool(
     allowlist: Optional[List[str]],
     denylist: Optional[List[str]],
     filesystem_root: Optional[str],
+    session_id: Optional[str] = None,
 ) -> ToolResult:
     decision = guard_tool_call(tool_name, environment, allowlist, denylist)
     if not decision.allowed:
@@ -415,6 +539,99 @@ def execute_tool(
                 )
         except Exception as exc:
             return ToolResult(False, f"HTTP fetch failed: {exc}", None)
+
+    if tool_name == "web_search":
+        query = str(payload.get("query", "")).strip()
+        max_results = int(payload.get("max_results", 5) or 5)
+        if not query:
+            return ToolResult(False, "Query is required", None)
+        search_url = "https://html.duckduckgo.com/html/?" + urlencode({"q": query})
+        net_decision = evaluate_urls([search_url], allowlist=allowlist or [], denylist=denylist or [])
+        if net_decision.blocked:
+            return ToolResult(False, net_decision.message, None)
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; Aegis-KriMo/1.0)",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            status, resp_headers, html_text = _safe_fetch_text(search_url, "GET", headers, policy.timeout_seconds, policy.max_bytes)
+            results = _parse_search_results(html_text, max(1, min(max_results, 10)))
+            return ToolResult(True, "Web search executed", {"query": query, "url": search_url, "status": status, "headers": resp_headers, "results": results, "count": len(results), "provider": "duckduckgo_html"})
+        except Exception as exc:
+            return ToolResult(False, f"Web search failed: {exc}", None)
+
+    if tool_name == "web_open":
+        url = str(payload.get("url", "")).strip()
+        max_links = int(payload.get("max_links", 12) or 12)
+        if not _is_http_url(url):
+            return ToolResult(False, "A valid http/https URL is required", None)
+        net_decision = evaluate_urls([url], allowlist=allowlist or [], denylist=denylist or [])
+        if net_decision.blocked:
+            return ToolResult(False, net_decision.message, None)
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; Aegis-KriMo/1.0)",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            status, resp_headers, html_text = _safe_fetch_text(url, "GET", headers, policy.timeout_seconds, policy.max_bytes)
+            summary = _extract_page_summary(url, html_text, max(1, min(max_links, 24)))
+            parsed = urlparse(url)
+            return ToolResult(True, "Web page opened", {"url": url, "host": parsed.netloc, "status": status, "headers": resp_headers, "title": summary["title"], "text_preview": summary["text_preview"], "links": summary["links"], "link_count": len(summary["links"])})
+        except Exception as exc:
+            return ToolResult(False, f"Web open failed: {exc}", None)
+
+    if tool_name in {"browser_navigate", "browser_click", "browser_type", "browser_snapshot", "browser_screenshot"}:
+        ok, err = browser_available()
+        if not ok:
+            return ToolResult(False, f"Browser automation unavailable: {err}", None)
+        if not session_id:
+            return ToolResult(False, "Session id is required for browser automation", None)
+
+        if tool_name == "browser_navigate":
+            url = str(payload.get("url", "")).strip()
+            wait_ms = int(payload.get("wait_ms", 1200) or 1200)
+            if not _is_http_url(url):
+                return ToolResult(False, "A valid http/https URL is required", None)
+            net_decision = evaluate_urls([url], allowlist=allowlist or [], denylist=denylist or [])
+            if net_decision.blocked:
+                return ToolResult(False, net_decision.message, None)
+            try:
+                return ToolResult(True, "Browser navigated", browser_navigate(session_id, url, wait_ms=wait_ms))
+            except Exception as exc:
+                return ToolResult(False, f"Browser navigation failed: {exc}", None)
+
+        if tool_name == "browser_click":
+            selector = str(payload.get("selector", "")).strip()
+            if not selector:
+                return ToolResult(False, "Selector is required", None)
+            try:
+                return ToolResult(True, "Browser click executed", browser_click(session_id, selector))
+            except Exception as exc:
+                return ToolResult(False, f"Browser click failed: {exc}", None)
+
+        if tool_name == "browser_type":
+            selector = str(payload.get("selector", "")).strip()
+            text = str(payload.get("text", ""))
+            submit = bool(payload.get("submit", False))
+            if not selector:
+                return ToolResult(False, "Selector is required", None)
+            try:
+                return ToolResult(True, "Browser type executed", browser_type(session_id, selector, text, submit=submit))
+            except Exception as exc:
+                return ToolResult(False, f"Browser type failed: {exc}", None)
+
+        if tool_name == "browser_snapshot":
+            wait_ms = int(payload.get("wait_ms", 0) or 0)
+            try:
+                return ToolResult(True, "Browser snapshot captured", browser_snapshot(session_id, wait_ms=wait_ms))
+            except Exception as exc:
+                return ToolResult(False, f"Browser snapshot failed: {exc}", None)
+
+        if tool_name == "browser_screenshot":
+            try:
+                return ToolResult(True, "Browser screenshot captured", browser_screenshot(session_id))
+            except Exception as exc:
+                return ToolResult(False, f"Browser screenshot failed: {exc}", None)
 
     if tool_name == "json_transform":
         data = payload.get("data")

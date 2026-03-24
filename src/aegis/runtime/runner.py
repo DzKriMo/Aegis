@@ -83,6 +83,8 @@ class GuardedRuntime:
             # like "system prompt". Let policy + provenance handle those instead
             # of quarantining the whole session.
             return False
+        if tool_name in {"web_search", "web_open", "browser_navigate", "browser_click", "browser_type", "browser_snapshot", "browser_screenshot"}:
+            return False
         return bool(self._tool_injection_re.search(text))
 
     def _apply_text_decision(self, text: str, decision) -> str:
@@ -106,6 +108,19 @@ class GuardedRuntime:
             and summary_mode
         )
 
+    def _is_openclaw_internal_input(self, content: str, metadata: Dict[str, Any]) -> bool:
+        source = str((metadata or {}).get("source") or "").strip().lower()
+        if source != "openclaw-plugin":
+            return False
+        text = str(content or "").strip()
+        if not text:
+            return False
+        return (
+            text.startswith("A new session was started via /new or /reset.")
+            or text.startswith("Policy decision: BLOCKED. Reason:")
+            or text.startswith("Policy decision: APPROVAL_REQUIRED.")
+        )
+
     def _mask_strings(self, value: Any, replacement: str) -> Any:
         if isinstance(value, str):
             return replacement
@@ -114,6 +129,30 @@ class GuardedRuntime:
         if isinstance(value, dict):
             return {k: self._mask_strings(v, replacement) for k, v in value.items()}
         return value
+
+    def _should_soft_reply_to_redacted_input(self, text: str, decision, context: Dict[str, Any]) -> bool:
+        if not getattr(decision, "redact", False):
+            return False
+        if getattr(decision, "blocked", False) or getattr(decision, "require_approval", False):
+            return False
+        try:
+            pii = self.detectors.run("pii", text, context)
+            hostile = any(
+                self.detectors.run(name, text, context)
+                for name in (
+                    "prompt_injection",
+                    "jailbreak",
+                    "goal_hijack",
+                    "internal_prompt_extraction",
+                    "exfiltration",
+                    "secrets",
+                    "high_risk_abuse",
+                    "policy_violation",
+                )
+            )
+            return bool(pii and not hostile)
+        except Exception:
+            return False
 
     def _build_model_output(self, prompt_text: str, model_name: Optional[str] = None) -> str:
         cleaned = " ".join((prompt_text or "").strip().split())
@@ -244,6 +283,7 @@ class GuardedRuntime:
             "risk_state": risk_state,
         }
         pack = self._apply_tenant_pack(tenant_id, environment, labels, metadata, context)
+        control = get_control_settings()
 
         def _log(event: Dict[str, Any]) -> None:
             payload = dict(event)
@@ -261,6 +301,36 @@ class GuardedRuntime:
                     "flags": norm_flags,
                 },
             )
+
+        if self._is_openclaw_internal_input(normalized, metadata):
+            _log(
+                {
+                    "stage": "prellm.bypass",
+                    "reason": "openclaw_internal_prompt",
+                    "content": normalized,
+                },
+            )
+            return {
+                "allowed": True,
+                "blocked": False,
+                "require_approval": False,
+                "message": None,
+                "risk_score": 0.0,
+                "approval_hash": None,
+                "sanitized_content": normalized,
+            }
+
+        if not bool(control.get("guardrails_enabled", True)):
+            _log({"stage": "prellm.bypass", "reason": "guardrails_disabled", "content": normalized})
+            return {
+                "allowed": True,
+                "blocked": False,
+                "require_approval": False,
+                "message": None,
+                "risk_score": 0.0,
+                "approval_hash": None,
+                "sanitized_content": normalized,
+            }
 
         try:
             llm_cls = classify_text(normalized)
@@ -442,12 +512,25 @@ class GuardedRuntime:
             "risk_state": risk_state,
         }
         self._apply_tenant_pack(tenant_id, environment, labels, metadata, context)
+        control = get_control_settings()
 
         def _log(event: Dict[str, Any]) -> None:
             payload = dict(event)
             payload["request_id"] = request_id
             payload["flow"] = "message"
             self.store.log_event(session_id, payload)
+
+        if not bool(control.get("guardrails_enabled", True)):
+            _log({"stage": "postllm.bypass", "reason": "guardrails_disabled", "content": output_text})
+            return {
+                "allowed": True,
+                "blocked": False,
+                "require_approval": False,
+                "message": None,
+                "risk_score": 0.0,
+                "approval_hash": None,
+                "sanitized_output": output_text,
+            }
 
         out_decision = self.policy_engine.evaluate(output_text, stage="postllm", detectors=self.detectors, context=context)
         _log(
@@ -599,6 +682,7 @@ class GuardedRuntime:
             "model_name": model_name or settings.aegis_model_name,
         }
         pack = self._apply_tenant_pack(tenant_id, environment, labels, metadata, context)
+        control = get_control_settings()
 
         def _log(event: Dict[str, Any]) -> None:
             payload = dict(event)
@@ -617,6 +701,13 @@ class GuardedRuntime:
                     "flags": norm_flags,
                 },
             )
+
+        if not bool(control.get("guardrails_enabled", True)):
+            _log({"stage": "prellm.bypass", "reason": "guardrails_disabled", "content": normalized})
+            resolved_model = model_name or settings.aegis_model_name
+            model_output = self._build_model_output(normalized, model_name=resolved_model)
+            _log({"stage": "model", "model": resolved_model, "input": normalized, "output": model_output})
+            return RuntimeResult(output=model_output, actions=[], risk_score=0.0, message=None, approval_hash=None, metadata={"guardrails_disabled": True})
 
         # 1) LLM classification (always log for visibility)
         try:
@@ -766,6 +857,35 @@ class GuardedRuntime:
                     "input_original": normalized,
                     "input_transformed": transformed_input,
                 },
+            )
+
+        if self._should_soft_reply_to_redacted_input(normalized, decision, context):
+            safe_reply = "Please don't send sensitive personal data here. Redact it first, then I can still help with the rest of your request."
+            _log(
+                {
+                    "stage": "prellm.soft_reply",
+                    "reason": "pii_input_redacted",
+                    "input_original": normalized,
+                    "input_transformed": transformed_input,
+                    "reply": safe_reply,
+                },
+            )
+            updated = self._update_and_persist_risk_state(
+                session_id,
+                risk_state,
+                0.08,
+                injection_signal=False,
+                tool_misuse_signal=False,
+                goal_drift_signal=False,
+            )
+            _log({"stage": "risk.update", "message_risk": 0.08, "ood_score": dyn.ood_score, "risk_state": updated})
+            return RuntimeResult(
+                output=safe_reply,
+                actions=["redact", "warn"],
+                risk_score=0.08,
+                message="Sensitive personal data was redacted from the input",
+                approval_hash=None,
+                metadata={"soft_reply": "pii_redaction"},
             )
 
         # 4) model response
@@ -930,12 +1050,32 @@ class GuardedRuntime:
             "risk_state": risk_state,
         }
         pack = self._apply_tenant_pack(tenant_id, environment, labels, {}, context)
+        control = get_control_settings()
 
         def _log(event: Dict[str, Any]) -> None:
             payload_event = dict(event)
             payload_event["request_id"] = request_id
             payload_event["flow"] = "tool"
             self.store.log_event(session_id, payload_event)
+
+        if not bool(control.get("guardrails_enabled", True)):
+            _log({"stage": "tool_pre.bypass", "reason": "guardrails_disabled", "tool": tool_name, "payload": payload})
+            try:
+                result = execute_tool(
+                    tool_name=tool_name,
+                    payload=payload,
+                    environment=environment,
+                    allowlist=allowlist,
+                    denylist=denylist,
+                    filesystem_root=filesystem_root,
+                    session_id=session_id,
+                )
+            except Exception as exc:
+                if settings.aegis_fail_closed:
+                    return {"allowed": False, "message": f"Tool execution error: {exc}", "result": None}
+                raise
+            _log({"stage": "tool_exec", "tool": tool_name, "payload": payload, "allowed": result.allowed, "message": result.message})
+            return {"allowed": result.allowed, "message": result.message, "result": result.result}
 
         if bool(risk_state.get("quarantined", False)) and is_sensitive_tool(tool_name):
             _log(
@@ -1356,6 +1496,7 @@ class GuardedRuntime:
                 allowlist=allowlist,
                 denylist=denylist,
                 filesystem_root=filesystem_root,
+                session_id=session_id,
             )
         except Exception as exc:
             if settings.aegis_fail_closed:

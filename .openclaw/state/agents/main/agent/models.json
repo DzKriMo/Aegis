@@ -26,12 +26,99 @@
     },
     "ollama": {
       "baseUrl": "http://127.0.0.1:11434",
-      "apiKey": "ollama-local",
+      "api": "ollama",
+      "models": [
+        {
+          "id": "deepseek-v3.1:671b-cloud",
+          "name": "deepseek-v3.1:671b-cloud",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 163840,
+          "maxTokens": 8192
+        },
+        {
+          "id": "deepseek-v3.2:cloud",
+          "name": "deepseek-v3.2:cloud",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 163840,
+          "maxTokens": 8192
+        },
+        {
+          "id": "deepseek-r1:8b",
+          "name": "deepseek-r1:8b",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 131072,
+          "maxTokens": 8192
+        },
+        {
+          "id": "deepseek-coder:6.7b",
+          "name": "deepseek-coder:6.7b",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 16384,
+          "maxTokens": 8192
+        },
+        {
+          "id": "qwen2.5:7b-instruct",
+          "name": "qwen2.5:7b-instruct",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 32768,
+          "maxTokens": 8192
+        }
+      ],
+      "apiKey": "ollama-local"
+    },
+    "llamacpp": {
+      "baseUrl": "http://127.0.0.1:8081/v1",
+      "apiKey": "local-free",
       "api": "openai-completions",
       "models": [
         {
-          "id": "qwen2.5:7b-instruct",
-          "name": "Ollama: qwen2.5:7b-instruct",
+          "id": "qwen2.5-3b-instruct-q4_k_m",
+          "name": "llama.cpp: qwen2.5-3b-instruct-q4_k_m",
           "reasoning": false,
           "input": [
             "text"
