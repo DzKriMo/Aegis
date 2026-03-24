@@ -12,6 +12,7 @@ def assess_tool_provenance(tool_name: str, environment: str | None, result: Any)
         "filesystem_edit": 0.84,
         "filesystem_patch": 0.84,
         "file_find": 0.93,
+        "repo_map": 0.94,
         "text_search": 0.9,
         "shell": 0.58,
         "http_fetch": 0.42,

@@ -72,6 +72,13 @@ _TOOLS: Dict[str, ToolPolicy] = {
         timeout_seconds=4,
         max_bytes=64 * 1024,
     ),
+    "repo_map": ToolPolicy(
+        name="repo_map",
+        allowed_envs=["dev", "prod"],
+        allowlist=[],
+        timeout_seconds=4,
+        max_bytes=64 * 1024,
+    ),
     "text_search": ToolPolicy(
         name="text_search",
         allowed_envs=["dev", "prod"],

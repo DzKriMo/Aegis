@@ -15,6 +15,19 @@ from .tools import guard_tool_call, guard_shell_command, guard_filesystem_path
 from ..prellm.network import evaluate_urls
 from .tool_registry import get_tool_policy
 
+_IGNORED_DIRS = {
+    ".git",
+    ".openclaw",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".idea",
+    ".vscode",
+}
+
 
 @dataclass
 class ToolResult:
@@ -46,15 +59,46 @@ def _truncate_text(text: str, max_bytes: Optional[int]) -> str:
 
 
 def _iter_text_files(root: str):
-    for dirpath, _, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _IGNORED_DIRS]
         for filename in filenames:
             yield os.path.join(dirpath, filename)
 
 
 def _iter_all_files(root: str):
-    for dirpath, _, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _IGNORED_DIRS]
         for filename in filenames:
             yield os.path.join(dirpath, filename)
+
+
+def _build_repo_tree(path: str, max_depth: int, max_entries: int) -> tuple[list[str], int]:
+    lines: list[str] = []
+    count = 0
+    root = Path(path)
+
+    def walk(current: Path, depth: int, prefix: str) -> None:
+        nonlocal count
+        if count >= max_entries or depth > max_depth:
+            return
+        try:
+            entries = sorted(
+                [entry for entry in current.iterdir() if entry.name not in _IGNORED_DIRS],
+                key=lambda p: (not p.is_dir(), p.name.lower()),
+            )
+        except Exception:
+            return
+        for entry in entries:
+            if count >= max_entries:
+                return
+            label = entry.name + ("/" if entry.is_dir() else "")
+            lines.append(f"{prefix}{label}")
+            count += 1
+            if entry.is_dir() and depth < max_depth:
+                walk(entry, depth + 1, prefix + "  ")
+
+    walk(root, 0, "")
+    return lines, count
 
 
 def execute_tool(
@@ -247,6 +291,43 @@ def execute_tool(
                 if len(matches) >= max_results:
                     break
         return ToolResult(True, "File find executed", {"pattern": pattern, "path": abs_path, "matches": matches, "count": len(matches)})
+
+    if tool_name == "repo_map":
+        path = str(payload.get("path", ".") or ".")
+        max_depth = int(payload.get("max_depth", 3) or 3)
+        max_entries = int(payload.get("max_entries", 200) or 200)
+        allowed, abs_path = _within_root(path, filesystem_root)
+        if filesystem_root and not allowed:
+            return ToolResult(False, "Filesystem access outside root blocked", None)
+        if not os.path.exists(abs_path) or not os.path.isdir(abs_path):
+            return ToolResult(False, "Path is not a directory", None)
+
+        tree_lines, shown = _build_repo_tree(abs_path, max_depth=max(1, max_depth), max_entries=max(20, max_entries))
+        ext_counts: Dict[str, int] = {}
+        file_count = 0
+        dir_count = 0
+        for dirpath, dirnames, filenames in os.walk(abs_path):
+            dirnames[:] = [d for d in dirnames if d not in _IGNORED_DIRS]
+            dir_count += len(dirnames)
+            file_count += len(filenames)
+            for filename in filenames:
+                suffix = Path(filename).suffix.lower() or "[no_ext]"
+                ext_counts[suffix] = ext_counts.get(suffix, 0) + 1
+        top_ext = sorted(ext_counts.items(), key=lambda item: (-item[1], item[0]))[:12]
+        return ToolResult(
+            True,
+            "Repo map executed",
+            {
+                "path": abs_path,
+                "tree": tree_lines,
+                "shown_entries": shown,
+                "file_count": file_count,
+                "dir_count": dir_count,
+                "top_extensions": [{"extension": ext, "count": count} for ext, count in top_ext],
+                "max_depth": max_depth,
+                "max_entries": max_entries,
+            },
+        )
 
     if tool_name == "text_search":
         query = str(payload.get("query", ""))

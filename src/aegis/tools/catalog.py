@@ -48,6 +48,12 @@ def tool_catalog() -> List[Dict[str, Any]]:
             "use_when": "The agent needs to locate candidate files before reading or editing them.",
         },
         {
+            "name": "repo_map",
+            "description": "Build a compact repository tree and extension summary within the allowed root.",
+            "payload_schema": {"path": "string?", "max_depth": "integer?", "max_entries": "integer?"},
+            "use_when": "The agent needs a quick structural map of the workspace or a subtree.",
+        },
+        {
             "name": "text_search",
             "description": "Search recursively for text in files within the allowed root.",
             "payload_schema": {"query": "string", "path": "string?", "literal": "boolean?", "case_sensitive": "boolean?", "max_results": "integer?"},

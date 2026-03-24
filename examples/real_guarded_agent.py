@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 import requests
@@ -20,6 +21,7 @@ MODEL_ENDPOINT = os.getenv("AGENT_MODEL_ENDPOINT", "http://127.0.0.1:11434/v1/ch
 MODEL_NAME = os.getenv("AGENT_MODEL_NAME", "qwen2.5:7b-instruct")
 MODEL_TEMPERATURE = float(os.getenv("AGENT_MODEL_TEMPERATURE", "0.1"))
 MODEL_MAX_TOKENS = int(os.getenv("AGENT_MODEL_MAX_TOKENS", "400"))
+MODEL_STREAM_ENABLED = os.getenv("AGENT_MODEL_STREAM", "true").lower() in {"1", "true", "yes", "on"}
 AGENT_ENV = os.getenv("AEGIS_AGENT_ENV", "dev")
 FILESYSTEM_ROOT = os.getenv("AEGIS_AGENT_FILESYSTEM_ROOT", os.getcwd())
 AGENT_NAME = "KriMo AI"
@@ -34,6 +36,43 @@ AGENT_BANNER = r"""
 MODEL_SESSION = requests.Session()
 
 
+@dataclass
+class AgentMemory:
+    recent_files: list[str] = field(default_factory=list)
+    recent_searches: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def remember_file(self, path: str) -> None:
+        path = path.strip()
+        if not path:
+            return
+        self.recent_files = [path] + [p for p in self.recent_files if p != path]
+        self.recent_files = self.recent_files[:8]
+
+    def remember_search(self, query: str) -> None:
+        query = query.strip()
+        if not query:
+            return
+        self.recent_searches = [query] + [q for q in self.recent_searches if q != query]
+        self.recent_searches = self.recent_searches[:8]
+
+    def remember_note(self, note: str) -> None:
+        note = note.strip()
+        if not note:
+            return
+        self.notes = [note] + self.notes[:11]
+
+    def render(self) -> str:
+        parts = []
+        if self.recent_files:
+            parts.append("Recent files: " + ", ".join(self.recent_files))
+        if self.recent_searches:
+            parts.append("Recent searches: " + " | ".join(self.recent_searches))
+        if self.notes:
+            parts.append("Notes: " + " | ".join(self.notes[:5]))
+        return "\n".join(parts) if parts else "No working memory yet."
+
+
 def attach_runtime(client: AegisClient, session_id: str) -> tuple[str, AegisAgentAdapter]:
     adapter = AegisAgentAdapter(client, session_id, environment=AGENT_ENV, filesystem_root=FILESYSTEM_ROOT)
     return session_id, adapter
@@ -44,13 +83,38 @@ def create_runtime(client: AegisClient) -> tuple[str, AegisAgentAdapter]:
     return attach_runtime(client, session_id)
 
 
-def model_chat(messages: list[dict[str, str]]) -> str:
+def model_chat(messages: list[dict[str, str]], stream: bool = False, stream_label: Optional[str] = None) -> str:
     payload = {
         "model": MODEL_NAME,
         "temperature": MODEL_TEMPERATURE,
         "max_tokens": MODEL_MAX_TOKENS,
         "messages": messages,
     }
+    if stream:
+        payload["stream"] = True
+        resp = MODEL_SESSION.post(MODEL_ENDPOINT, json=payload, timeout=90, stream=True)
+        resp.raise_for_status()
+        parts: list[str] = []
+        announced = False
+        for raw in resp.iter_lines(decode_unicode=True):
+            if not raw:
+                continue
+            line = raw.strip()
+            if line == "data: [DONE]":
+                break
+            if not line.startswith("data: "):
+                continue
+            try:
+                chunk = json.loads(line[6:])
+            except Exception:
+                continue
+            delta = (((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content")) or ""
+            if delta:
+                parts.append(delta)
+                if stream_label and not announced:
+                    print(f"[stream] {stream_label}")
+                    announced = True
+        return "".join(parts).strip()
     resp = MODEL_SESSION.post(MODEL_ENDPOINT, json=payload, timeout=90)
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"].strip()
@@ -178,6 +242,24 @@ def render_file_find_result(result: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_repo_map_result(result: Dict[str, Any]) -> str:
+    path = str((result or {}).get("path") or ".")
+    tree = (result or {}).get("tree") or []
+    files = int((result or {}).get("file_count") or 0)
+    dirs = int((result or {}).get("dir_count") or 0)
+    exts = (result or {}).get("top_extensions") or []
+    lines = [f"Repository map for {path}:", f"- files: {files}", f"- directories: {dirs}"]
+    if exts:
+        ext_summary = ", ".join(f"{item.get('extension')}: {item.get('count')}" for item in exts[:8])
+        lines.append(f"- top extensions: {ext_summary}")
+    if tree:
+        lines.append("Tree:")
+        lines.extend(f"  {line}" for line in tree[:80])
+        if len(tree) > 80:
+            lines.append(f"  ...and {len(tree) - 80} more")
+    return "\n".join(lines)
+
+
 def compact_tool_result(tool_name: str, result: Dict[str, Any]) -> str:
     if tool_name == "directory_list":
         return render_directory_listing(result)
@@ -191,6 +273,8 @@ def compact_tool_result(tool_name: str, result: Dict[str, Any]) -> str:
         return render_patch_result(result)
     if tool_name == "file_find":
         return render_file_find_result(result)
+    if tool_name == "repo_map":
+        return render_repo_map_result(result)
     if tool_name == "text_search":
         return render_text_search_result(result)
     if tool_name == "json_transform":
@@ -348,6 +432,7 @@ def parse_loose_tool_call(text: str) -> Optional[Dict[str, Any]]:
         "http_fetch",
         "json_transform",
         "file_find",
+        "repo_map",
         "text_search",
         "shell",
     ]
@@ -402,6 +487,7 @@ def parse_agent_action(text: str) -> Dict[str, Any]:
                 "http_fetch",
                 "json_transform",
                 "file_find",
+                "repo_map",
                 "text_search",
             }
             if action == "tool" and isinstance(obj.get("tool_name"), str):
@@ -455,14 +541,171 @@ def extract_json_blob(text: str) -> Optional[Any]:
         return None
 
 
+def add_line_references(text: str, max_lines: int = 80) -> str:
+    lines = text.splitlines()
+    rendered = [f"{idx + 1}: {line}" for idx, line in enumerate(lines[:max_lines])]
+    if len(lines) > max_lines:
+        rendered.append(f"... truncated after {max_lines} lines")
+    return "\n".join(rendered)
+
+
+def build_memory_context(memory: AgentMemory) -> str:
+    rendered = memory.render()
+    return "" if rendered == "No working memory yet." else f"\nWorking memory:\n{rendered}\n"
+
+
+def summarize_code_file(path: str, content: str, memory: AgentMemory) -> str:
+    prompt = (
+        f"Summarize the code in {path}.\n"
+        "Focus on purpose, important functions/classes, data flow, and risks.\n"
+        "Cite specific line numbers from the provided source.\n"
+        "Return plain text bullets only."
+        f"{build_memory_context(memory)}\n"
+        "Source:\n"
+        f"{add_line_references(content)}"
+    )
+    return model_chat(
+        [
+            {"role": "system", "content": "You are a concise senior engineer. Use the provided line numbers explicitly."},
+            {"role": "user", "content": prompt},
+        ],
+        stream=MODEL_STREAM_ENABLED,
+        stream_label=f"Summarizing code in {path}",
+    )
+
+
+def update_memory_from_tool(memory: AgentMemory, action: Dict[str, Any]) -> None:
+    tool_name = action.get("tool_name")
+    payload = action.get("payload") or {}
+    if tool_name in {"filesystem_read", "filesystem_write", "filesystem_edit", "filesystem_patch"}:
+        memory.remember_file(str(payload.get("path") or ""))
+    if tool_name == "text_search":
+        memory.remember_search(str(payload.get("query") or ""))
+    if tool_name == "file_find":
+        memory.remember_search(f"find:{payload.get('pattern')}")
+
+
+def execute_agent_tool_action(
+    adapter: AegisAgentAdapter,
+    client: AegisClient,
+    session_id: str,
+    action: Dict[str, Any],
+    user_text: str,
+    memory: AgentMemory,
+    trusted_local_tools: set[str],
+) -> tuple[str, Dict[str, Any]]:
+    print(f"[agent] tool_request={action['tool_name']} payload={json.dumps(action['payload'], ensure_ascii=True)}")
+    tool_res = execute_tool_with_approvals(adapter, client, session_id, action["tool_name"], action["payload"])
+    output_metadata: Dict[str, Any] = {"source": "real_guarded_agent"}
+    if not tool_res.get("allowed", False):
+        return f"Tool blocked by Aegis: {tool_res.get('message')}", output_metadata
+
+    print(f"[agent] tool_allowed={action['tool_name']}")
+    update_memory_from_tool(memory, action)
+    output_metadata.update(
+        {
+            "derived_from_tool": action["tool_name"],
+            "tool_trust": "high" if action["tool_name"] in trusted_local_tools else "low",
+            "summary_mode": action["tool_name"] in {"filesystem_read", "directory_list", "http_fetch", "repo_map"},
+        }
+    )
+    if action.get("mode") == "code_summary":
+        path = str(action["payload"].get("path") or "the file")
+        content = str((tool_res.get("result") or {}).get("content") or "")
+        return summarize_code_file(path, content, memory), output_metadata
+    return answer_from_tool_result(user_text, action, tool_res), output_metadata
+
+
+def run_autocode_task(
+    task: str,
+    adapter: AegisAgentAdapter,
+    client: AegisClient,
+    session_id: str,
+    tool_catalog_json: str,
+    memory: AgentMemory,
+    trusted_local_tools: set[str],
+    max_steps: int = 6,
+) -> str:
+    observations: list[str] = []
+    for step in range(1, max_steps + 1):
+        plan_prompt = (
+            "You are KriMo, a guarded local coding agent.\n"
+            "Solve the user's coding task in a few steps.\n"
+            "Use tools when needed for search/read/edit/map tasks.\n"
+            "When you have enough information, return the final answer.\n"
+            "Return only valid JSON in one of these forms:\n"
+            '{"action":"answer","content":"..."}\n'
+            '{"action":"tool","tool_name":"...","payload":{...}}\n'
+            f"Available tools:\n{tool_catalog_json}\n"
+            f"{build_memory_context(memory)}"
+            f"Current task:\n{task}\n"
+            f"Step {step} of {max_steps}.\n"
+        )
+        if observations:
+            plan_prompt += "Observations so far:\n" + "\n".join(f"- {item}" for item in observations[-8:]) + "\n"
+        action = parse_agent_action(
+            model_chat(
+                [
+                    {"role": "system", "content": "Return only JSON. Prefer the smallest useful next action."},
+                    {"role": "user", "content": plan_prompt},
+                ],
+                stream=MODEL_STREAM_ENABLED,
+                stream_label=f"Autocode step {step}",
+            )
+        )
+        if action.get("action") == "answer":
+            content = str(action.get("content") or "").strip()
+            if content:
+                return content
+            observations.append(f"step {step}: model returned empty answer")
+            continue
+        if action.get("action") != "tool":
+            observations.append(f"step {step}: unsupported action {action}")
+            continue
+        result_text, _ = execute_agent_tool_action(adapter, client, session_id, action, task, memory, trusted_local_tools)
+        observations.append(f"{action['tool_name']}: {result_text[:800]}")
+
+    synthesis_prompt = (
+        f"Finish this coding task based on the observations below.\nTask: {task}\n"
+        + "\n".join(f"- {item}" for item in observations[-10:])
+    )
+    return model_chat(
+        [
+            {"role": "system", "content": "Answer plainly and concisely based only on the provided observations."},
+            {"role": "user", "content": synthesis_prompt},
+        ],
+        stream=MODEL_STREAM_ENABLED,
+        stream_label="Synthesizing final coding answer",
+    )
+
+
 def detect_direct_tool_intent(user_text: str) -> Optional[Dict[str, Any]]:
     text = user_text.strip()
     lower = text.lower()
 
+    if lower in {"tree", "repo map", "repomap", "map repo"}:
+        return {
+            "action": "tool",
+            "tool_name": "repo_map",
+            "payload": {"path": ".", "max_depth": 3, "max_entries": 200},
+            "mode": "fast",
+            "guard_text": "Build a repository map for the current workspace.",
+        }
     if lower in {"ls", "ls .", "dir", "dir .", "list files", "list the files", "list the files in the current directory"}:
         return {"action": "tool", "tool_name": "directory_list", "payload": {"path": "."}, "mode": "fast", "guard_text": "List the files in the current directory."}
     if lower in {"pwd", "where am i", "current directory"}:
         return {"action": "answer", "content": os.getcwd(), "mode": "fast", "guard_text": "Show the current working directory."}
+
+    tree_match = re.match(r"^(?:tree|repo map)\s+(.+)$", text, re.IGNORECASE)
+    if tree_match:
+        path = tree_match.group(1).strip().strip("\"'")
+        return {
+            "action": "tool",
+            "tool_name": "repo_map",
+            "payload": {"path": path, "max_depth": 3, "max_entries": 200},
+            "mode": "fast",
+            "guard_text": f"Build a repository map for {path}.",
+        }
 
     if lower.startswith("ls "):
         path = text[3:].strip() or "."
@@ -591,6 +834,17 @@ def detect_direct_tool_intent(user_text: str) -> Optional[Dict[str, Any]]:
                 "guard_text": "List the keys in the provided JSON data.",
             }
 
+    code_summary_match = re.match(r"^(?:summarize code|summarise code|explain code)\s+(.+)$", text, re.IGNORECASE)
+    if code_summary_match:
+        path = code_summary_match.group(1).strip().strip("\"'")
+        return {
+            "action": "tool",
+            "tool_name": "filesystem_read",
+            "payload": {"path": path},
+            "mode": "code_summary",
+            "guard_text": f"Read and summarize the code file {path}.",
+        }
+
     return None
 
 
@@ -599,7 +853,7 @@ def answer_from_tool_result(user_text: str, action: Dict[str, Any], tool_res: Di
     tool_name = action["tool_name"]
     if tool_name == "filesystem_read" and wants_exact_file_read(user_text, tool_name):
         return exact_file_read_answer(action["payload"], result)
-    if tool_name in {"directory_list", "filesystem_write", "filesystem_edit", "filesystem_patch", "file_find", "text_search", "json_transform"}:
+    if tool_name in {"directory_list", "filesystem_write", "filesystem_edit", "filesystem_patch", "file_find", "repo_map", "text_search", "json_transform"}:
         return compact_tool_result(tool_name, result)
     if tool_name == "filesystem_read" and not wants_summary(user_text):
         return exact_file_read_answer(action["payload"], result)
@@ -629,6 +883,7 @@ def answer_from_tool_result(user_text: str, action: Dict[str, Any], tool_res: Di
 def main() -> int:
     client = AegisClient(AEGIS_BASE, AEGIS_API_KEY)
     session_id, adapter = create_runtime(client)
+    memory = AgentMemory()
     print(AGENT_BANNER)
     print(f"{AGENT_NAME} is ready")
     print(f"[aegis] session={session_id}")
@@ -639,6 +894,7 @@ def main() -> int:
         "filesystem_edit",
         "filesystem_patch",
         "file_find",
+        "repo_map",
         "text_search",
     }
 
@@ -665,6 +921,7 @@ def main() -> int:
             return 0
         if user_text.lower() == "/new":
             session_id, adapter = create_runtime(client)
+            memory = AgentMemory()
             print(AGENT_BANNER)
             print(f"{AGENT_NAME} ready")
             print(f"[aegis] session={session_id}")
@@ -699,6 +956,46 @@ def main() -> int:
         if user_text.lower() == "/model":
             print(f"[aegis] model={MODEL_NAME} endpoint={MODEL_ENDPOINT}")
             continue
+        if user_text.lower() == "/memory":
+            print(memory.render())
+            continue
+        if user_text.lower().startswith("/remember "):
+            memory.remember_note(user_text.split(None, 1)[1])
+            print("[aegis] memory updated")
+            continue
+        if user_text.lower().startswith("/autocode "):
+            task = user_text.split(None, 1)[1].strip()
+            if not task:
+                print("[agent] usage: /autocode <coding task>")
+                continue
+            guarded_in = adapter.guard_input(task, metadata={"source": "real_guarded_agent", "mode": "autocode"})
+            if guarded_in.get("blocked"):
+                print(f"aegis(block)> {guarded_in.get('message')}")
+                continue
+            if guarded_in.get("require_approval"):
+                print(f"aegis(approval)> {guarded_in.get('message')}")
+                print(f"aegis(hash)> {guarded_in.get('approval_hash')}")
+                continue
+            safe_task = guarded_in.get("sanitized_content") or task
+            final_output = run_autocode_task(
+                safe_task,
+                adapter,
+                client,
+                session_id,
+                tool_catalog_json,
+                memory,
+                trusted_local_tools,
+            )
+            guarded_out = guard_output_with_approvals(adapter, client, session_id, final_output, {"source": "real_guarded_agent", "mode": "autocode"})
+            if guarded_out.get("blocked"):
+                print(f"aegis(post-block)> {guarded_out.get('message')}")
+                continue
+            if guarded_out.get("require_approval"):
+                print(f"aegis(post-approval)> {guarded_out.get('message')}")
+                print(f"aegis(hash)> {guarded_out.get('approval_hash')}")
+                continue
+            print(f"{AGENT_NAME}> {format_display_text(guarded_out.get('sanitized_output') or final_output)}")
+            continue
         if user_text.lower() == "/tools":
             names = [tool.get("name") for tool in adapter.describe_tools() if tool.get("name")]
             print("[aegis] tools=" + ", ".join(names))
@@ -712,7 +1009,7 @@ def main() -> int:
             )
             continue
         if user_text.lower() == "/help":
-            print("Commands: /new, /attach <session_id>, /session, /model, /tools, /risk, /resetrisk, /help, exit")
+            print("Commands: /new, /attach <session_id>, /session, /model, /tools, /memory, /remember <note>, /autocode <task>, /risk, /resetrisk, /help, exit")
             continue
 
         pre_action = detect_direct_tool_intent(user_text)
@@ -730,10 +1027,10 @@ def main() -> int:
         action = pre_action or detect_direct_tool_intent(safe_input)
         if action is None:
             messages = [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": system_prompt + build_memory_context(memory)},
                 {"role": "user", "content": safe_input},
             ]
-            first = model_chat(messages)
+            first = model_chat(messages, stream=MODEL_STREAM_ENABLED, stream_label="Planning response")
             action = parse_agent_action(first)
             if action.get("action") == "answer" and not str(action.get("content") or "").strip() and first.strip().startswith("{"):
                 action = {"action": "answer", "content": force_plain_answer(safe_input)}
@@ -743,20 +1040,16 @@ def main() -> int:
         final_output = action.get("content") or ""
         output_metadata: Dict[str, Any] = {"source": "real_guarded_agent"}
         if action.get("action") == "tool":
-            print(f"[agent] tool_request={action['tool_name']} payload={json.dumps(action['payload'], ensure_ascii=True)}")
-            tool_res = execute_tool_with_approvals(adapter, client, session_id, action["tool_name"], action["payload"])
-            if not tool_res.get("allowed", False):
-                final_output = f"Tool blocked by Aegis: {tool_res.get('message')}"
-            else:
-                print(f"[agent] tool_allowed={action['tool_name']}")
-                output_metadata.update(
-                    {
-                        "derived_from_tool": action["tool_name"],
-                        "tool_trust": "high" if action["tool_name"] in trusted_local_tools else "low",
-                        "summary_mode": action["tool_name"] in {"filesystem_read", "directory_list", "http_fetch"},
-                    }
-                )
-                final_output = answer_from_tool_result(safe_input, action, tool_res)
+            final_output, tool_metadata = execute_agent_tool_action(
+                adapter,
+                client,
+                session_id,
+                action,
+                safe_input,
+                memory,
+                trusted_local_tools,
+            )
+            output_metadata.update(tool_metadata)
 
         guarded_out = guard_output_with_approvals(adapter, client, session_id, final_output, output_metadata)
         if guarded_out.get("blocked"):

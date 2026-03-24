@@ -38,6 +38,9 @@ class GuardedTools:
     def file_find(self, pattern: str, path: str = ".", max_results: int = 50) -> Dict[str, Any]:
         return self.adapter.run_tool("file_find", {"pattern": pattern, "path": path, "max_results": max_results})
 
+    def repo_map(self, path: str = ".", max_depth: int = 3, max_entries: int = 200) -> Dict[str, Any]:
+        return self.adapter.run_tool("repo_map", {"path": path, "max_depth": max_depth, "max_entries": max_entries})
+
     def text_search(self, query: str, path: str = ".", literal: bool = True, case_sensitive: bool = False, max_results: int = 50) -> Dict[str, Any]:
         return self.adapter.run_tool(
             "text_search",
