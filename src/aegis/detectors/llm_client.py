@@ -39,6 +39,29 @@ _KEYS = [
     "policy_violation",
 ]
 
+_PROMPT_INJECTION_PATTERNS = [
+    r"\bignore (?:all |any )?(?:previous|prior|above) instructions\b",
+    r"\bforget all (?:the )?(?:above|previous)\b",
+    r"\bsystem prompt\b",
+    r"\bdeveloper (?:message|instructions|mode)\b",
+    r"\boverride (?:your )?instructions\b",
+]
+
+_EXFILTRATION_PATTERNS = [
+    r"\b(?:env|environment variables?)\b",
+    r"\bsecret(?:s)?\b",
+    r"\btoken(?:s)?\b",
+    r"\bapi[_ -]?key\b",
+    r"\bcredential(?:s)?\b",
+    r"\bhidden (?:config|instructions?)\b",
+]
+
+_GOAL_HIJACK_PATTERNS = [
+    r"\bignore (?:all |any )?(?:previous|prior|above) instructions\b",
+    r"\bforget all (?:the )?(?:above|previous)\b",
+    r"\binstead\b",
+]
+
 
 def _build_user_prompt(text: str) -> str:
     return f"{USER_PREFIX}\n\nCONTENT:\n{text}"
@@ -84,14 +107,27 @@ def _extract_json(text: str) -> Dict[str, Any] | None:
         return None
 
 
-def classify_text(text: str) -> Dict[str, Any]:
+def _fallback_classify(text: str) -> Dict[str, Any]:
+    low = (text or "").lower()
+    result = _empty_result()
+    result["prompt_injection"] = any(re.search(p, low, re.IGNORECASE) for p in _PROMPT_INJECTION_PATTERNS)
+    result["exfiltration"] = any(re.search(p, low, re.IGNORECASE) for p in _EXFILTRATION_PATTERNS)
+    result["goal_hijack"] = any(re.search(p, low, re.IGNORECASE) for p in _GOAL_HIJACK_PATTERNS)
+    result["secrets"] = result["exfiltration"] and any(term in low for term in ["env", "secret", "token", "api key", "credential"])
+    if result["prompt_injection"] and result["exfiltration"]:
+        result["policy_violation"] = True
+    result["__fallback__"] = "lexical"
+    return result
+
+
+def classify_text(text: str, model_name: str | None = None) -> Dict[str, Any]:
     if not settings.aegis_llm_enabled:
         result = _empty_result()
         result["__error__"] = "llm_disabled"
         return result
 
     payload: Dict[str, Any] = {
-        "model": settings.aegis_llm_model,
+        "model": model_name or settings.aegis_llm_model,
         "temperature": 0.0,
         "max_tokens": 260,
         "messages": [
@@ -100,29 +136,36 @@ def classify_text(text: str) -> Dict[str, Any]:
         ],
     }
 
+    timeout = httpx.Timeout(connect=5.0, read=float(settings.aegis_llm_timeout), write=30.0, pool=5.0)
     try:
-        with httpx.Client(timeout=settings.aegis_llm_timeout) as client:
-            resp = client.post(settings.aegis_llm_endpoint, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"]
-            parsed = _extract_json(content)
-            if parsed is None:
-                result = _empty_result()
-                result["__error__"] = "invalid_json"
-                result["__raw__"] = content[:500]
-                return result
+        with httpx.Client(timeout=timeout) as client:
+            last_exc: Exception | None = None
+            for _attempt in range(2):
+                try:
+                    resp = client.post(settings.aegis_llm_endpoint, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"]
+                    parsed = _extract_json(content)
+                    if parsed is None:
+                        result = _empty_result()
+                        result["__error__"] = "invalid_json"
+                        result["__raw__"] = content[:500]
+                        return result
 
-            result = _empty_result()
-            for k in _KEYS:
-                if k in parsed:
-                    result[k] = _to_bool(parsed.get(k, False))
+                    result = _empty_result()
+                    for k in _KEYS:
+                        if k in parsed:
+                            result[k] = _to_bool(parsed.get(k, False))
 
-            # Keep raw for diagnostics if model returned no positives.
-            if not any(result[k] for k in _KEYS):
-                result["__raw__"] = content[:300]
-            return result
+                    if not any(result[k] for k in _KEYS):
+                        result["__raw__"] = content[:300]
+                    return result
+                except httpx.ReadTimeout as exc:
+                    last_exc = exc
+                    continue
+            raise last_exc or RuntimeError("llm_classification_timeout")
     except Exception as exc:
-        result = _empty_result()
+        result = _fallback_classify(text)
         result["__error__"] = str(exc)
         return result

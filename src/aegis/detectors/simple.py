@@ -8,8 +8,10 @@ from .semantic import SemanticMatcher
 INJECTION_PATTERNS = [
     r"ignore previous instructions",
     r"ignore (all|any) (previous|prior|earlier) (instructions?|rules?)",
+    r"ignore (all|any) of (the )?(above|previous|prior|earlier)",
     r"disregard (the )?(above|previous|prior) (instructions?|rules?)",
     r"forget (your|all) (instructions?|guardrails?|safety)",
+    r"forget (all|any) of (the )?(above|previous|prior|earlier)",
     r"override (the )?(system|developer|policy) (prompt|message|instructions?)",
     r"system prompt",
     r"developer mode",
@@ -69,6 +71,7 @@ EXFIL_PATTERNS = [
     r"authorization:\s*bearer",
     r"api[-_ ]?key",
     r"\b(environment variables?|env vars?)\b",
+    r"\bcontent(?:s)?\b.{0,40}\b(?:of|inside|in)\b.{0,20}\b(?:env|environment|\.env)\b",
     r"\b\.env\b",
     r"\b/etc/(passwd|shadow)\b",
     r"\b(jwt secret|secret key|token)\b",
@@ -188,6 +191,15 @@ def _looks_like_pan(value: str) -> bool:
     return total % 10 == 0
 
 
+def _is_trusted_local_summary(context: Dict) -> bool:
+    metadata = context.get("metadata") or {}
+    return (
+        bool(metadata.get("summary_mode"))
+        and str(metadata.get("tool_trust") or "").strip().lower() == "high"
+        and str(metadata.get("derived_from_tool") or "").strip() in {"filesystem_read", "directory_list"}
+    )
+
+
 def _has_direct_sensitive_exfil_request(text: str) -> bool:
     # Treat quoted/example-driven research phrasing as non-imperative by default.
     if RESEARCH_CONTEXT.search(text) and re.search(r"\b(example|for example|like)\b", text, re.IGNORECASE) and not LEAK_VERBS.search(text):
@@ -202,6 +214,18 @@ def _has_direct_sensitive_exfil_request(text: str) -> bool:
         or SIMULATION_VERBS.search(text)
     )
     return has_strong_verb
+
+
+def _has_sensitive_exfil_support(text: str) -> bool:
+    if _has_direct_sensitive_exfil_request(text):
+        return True
+    return bool(
+        re.search(
+            r"\b(system prompt|developer message|hidden instructions?|internal config|environment variables?|env vars?|\.env|api[-_ ]?key|secret(?:s)?|token(?:s)?)\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
 
 
 def _looks_like_benign_discussion(text: str) -> bool:
@@ -283,7 +307,10 @@ def detect_pii(text: str, context: Dict) -> bool:
 
 def detect_secrets(text: str, context: Dict) -> bool:
     llm = context.get("llm_classification", {})
-    return _match_any(SECRET_PATTERNS, text) or bool(llm.get("secrets", False))
+    lexical_match = _match_any(SECRET_PATTERNS, text)
+    if _is_trusted_local_summary(context):
+        return lexical_match
+    return lexical_match or bool(llm.get("secrets", False))
 
 
 def detect_policy_violation(text: str, context: Dict) -> bool:
@@ -327,8 +354,14 @@ def detect_exfiltration(text: str, context: Dict) -> bool:
     if _is_fictional_context(text):
         return False
 
+    lexical_match = _match_any(EXFIL_PATTERNS, text) or _contains_obfuscated_attack(text)
+    if _is_trusted_local_summary(context):
+        return lexical_match
+
     llm = context.get("llm_classification", {})
-    return _match_any(EXFIL_PATTERNS, text) or _contains_obfuscated_attack(text) or matcher.match("exfiltration", text) or bool(llm.get("exfiltration", False))
+    semantic_match = matcher.match("exfiltration", text)
+    llm_match = bool(llm.get("exfiltration", False)) and _has_sensitive_exfil_support(text)
+    return lexical_match or semantic_match or llm_match
 
 
 def detect_goal_hijack(text: str, context: Dict) -> bool:
@@ -362,6 +395,28 @@ def detect_data_leakage(text: str, context: Dict) -> bool:
     return _match_any(DATA_LEAKAGE, text) or matcher.match("data_leakage", text) or bool(llm.get("data_leakage", False))
 
 
+def _has_local_ml_block_support(text: str) -> bool:
+    text = str(text or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if len(lowered) <= 48 and len(re.findall(r"[a-z]+", lowered)) <= 3:
+        if not (
+            _match_any(INJECTION_PATTERNS, lowered)
+            or _match_any(JAILBREAK_PATTERNS, lowered)
+            or _match_any(EXFIL_PATTERNS, lowered)
+            or _match_any(SECRET_PATTERNS, lowered)
+            or _match_any(POLICY_VIOLATION, lowered)
+            or _match_any(INTERNAL_PROMPT_EXTRACTION_PATTERNS, lowered)
+            or _match_any(DATA_LEAKAGE, lowered)
+            or _match_any(GOAL_HIJACK, lowered)
+            or _contains_obfuscated_attack(lowered)
+            or _has_direct_sensitive_exfil_request(lowered)
+        ):
+            return False
+    return True
+
+
 def detect_ml_block_intent(text: str, context: Dict) -> bool:
     local = context.get("local_classification", {})
     if not local.get("enabled"):
@@ -369,7 +424,7 @@ def detect_ml_block_intent(text: str, context: Dict) -> bool:
     label = str(local.get("label", "")).upper()
     conf = float(local.get("confidence", 0.0) or 0.0)
     threshold = float(context.get("local_block_threshold", 0.78))
-    return label == "BLOCK" and conf >= threshold
+    return label == "BLOCK" and conf >= threshold and _has_local_ml_block_support(text)
 
 
 def detect_ml_warn_intent(text: str, context: Dict) -> bool:
@@ -379,4 +434,4 @@ def detect_ml_warn_intent(text: str, context: Dict) -> bool:
     label = str(local.get("label", "")).upper()
     conf = float(local.get("confidence", 0.0) or 0.0)
     threshold = float(context.get("local_warn_threshold", 0.64))
-    return label == "WARN" and conf >= threshold
+    return label == "WARN" and conf >= threshold and _has_local_ml_block_support(text)

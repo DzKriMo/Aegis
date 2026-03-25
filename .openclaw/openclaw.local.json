@@ -1,0 +1,72 @@
+﻿{
+    "models":  {
+                   "providers":  {
+                                     "local":  {
+                                                   "models":  [
+                                                                  {
+                                                                      "id":  "qwen2.5-3b-instruct",
+                                                                      "name":  "Qwen2.5 3B Instruct (Local llama.cpp)",
+                                                                      "contextWindow":  16384,
+                                                                      "reasoning":  false,
+                                                                      "cost":  {
+                                                                                   "input":  0,
+                                                                                   "cacheRead":  0,
+                                                                                   "cacheWrite":  0,
+                                                                                   "output":  0
+                                                                               },
+                                                                      "input":  [
+                                                                                    "text"
+                                                                                ],
+                                                                      "maxTokens":  2048
+                                                                  }
+                                                              ],
+                                                   "baseUrl":  "http://127.0.0.1:8080/v1",
+                                                   "api":  "openai-completions",
+                                                   "apiKey":  "local-free"
+                                               }
+                                 },
+                   "mode":  "merge"
+               },
+    "agents":  {
+                   "defaults":  {
+                                    "workspace":  "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\.openclaw\\workspace",
+                                    "compaction":  {
+                                                       "memoryFlush":  {
+                                                                           "enabled":  false
+                                                                       },
+                                                       "mode":  "safeguard"
+                                                   },
+                                    "models":  {
+                                                   "local/qwen2.5-3b-instruct":  {
+                                                                                     "params":  {
+                                                                                                    "maxTokens":  256,
+                                                                                                    "timeoutMs":  180000,
+                                                                                                    "temperature":  0.2
+                                                                                                }
+                                                                                 }
+                                               },
+                                    "model":  {
+                                                  "primary":  "local/qwen2.5-3b-instruct"
+                                              }
+                                }
+               },
+    "plugins":  {
+                    "load":  {
+                                 "paths":  [
+
+                                           ]
+                             },
+                    "entries":  {
+
+                                },
+                    "enabled":  false
+                },
+    "gateway":  {
+                    "port":  18790,
+                    "bind":  "loopback",
+                    "mode":  "local",
+                    "auth":  {
+                                 "mode":  "none"
+                             }
+                }
+}

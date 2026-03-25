@@ -16,6 +16,7 @@ class PolicyDecision:
     message: Optional[str] = None
     redaction: Optional[str] = None
     risk_score: float = 0.0
+    matched_rules: List[str] | None = None
 
     def actions(self) -> List[str]:
         actions = []
@@ -46,6 +47,7 @@ class PolicyDecision:
             "message": self.message,
             "redaction": self.redaction,
             "risk_score": self.risk_score,
+            "matched_rules": list(self.matched_rules or []),
         }
 
 
@@ -67,15 +69,17 @@ class PolicyEngine:
             return PolicyDecision()
 
         decision = PolicyDecision()
+        decision.matched_rules = []
         try:
             for rule in self.policies:
                 if rule.get("stage") and rule["stage"] != stage:
                     continue
                 if self._matches(rule, text, detectors, context):
+                    decision.matched_rules.append(str(rule.get("id") or "unnamed"))
                     decision.risk_score += float(rule.get("risk", 0.0))
                     action = rule.get("action")
                     if action == "block":
-                        return PolicyDecision(blocked=True, message=rule.get("message"), risk_score=decision.risk_score)
+                        return PolicyDecision(blocked=True, message=rule.get("message"), risk_score=decision.risk_score, matched_rules=list(decision.matched_rules))
                     if action == "redact":
                         decision.redact = True
                         decision.redaction = rule.get("redaction", "[REDACTED]")

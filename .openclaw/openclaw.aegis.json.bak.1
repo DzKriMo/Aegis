@@ -1,49 +1,49 @@
 ﻿{
     "meta":  {
                  "lastTouchedVersion":  "2026.3.2",
-                 "lastTouchedAt":  "2026-03-05T15:35:09.421Z"
+                 "lastTouchedAt":  "2026-03-23T23:58:16.145Z"
              },
     "models":  {
                    "providers":  {
-                                     "local":  {
-                                                   "models":  [
-                                                                  {
-                                                                      "id":  "qwen2.5-3b-instruct",
-                                                                      "name":  "Qwen2.5 3B Instruct (Local llama.cpp)",
-                                                                      "contextWindow":  32768,
-                                                                      "reasoning":  false,
-                                                                      "cost":  {
-                                                                                   "input":  0,
-                                                                                   "cacheRead":  0,
-                                                                                   "cacheWrite":  0,
-                                                                                   "output":  0
-                                                                               },
-                                                                      "input":  [
-                                                                                    "text"
-                                                                                ],
-                                                                      "maxTokens":  2048
-                                                                  }
-                                                              ],
-                                                   "baseUrl":  "http://127.0.0.1:8080/v1",
-                                                   "api":  "openai-completions",
-                                                   "apiKey":  "local-free"
-                                               }
+                                     "ollama":  {
+                                                    "models":  [
+                                                                   {
+                                                                       "id":  "qwen2.5:7b-instruct",
+                                                                       "name":  "Ollama: qwen2.5:7b-instruct",
+                                                                       "contextWindow":  32768,
+                                                                       "reasoning":  false,
+                                                                       "cost":  {
+                                                                                    "input":  0,
+                                                                                    "cacheRead":  0,
+                                                                                    "cacheWrite":  0,
+                                                                                    "output":  0
+                                                                                },
+                                                                       "input":  [
+                                                                                     "text"
+                                                                                 ],
+                                                                       "maxTokens":  2048
+                                                                   }
+                                                               ],
+                                                    "baseUrl":  "http://127.0.0.1:11434/v1",
+                                                    "api":  "openai-completions",
+                                                    "apiKey":  "local-free"
+                                                }
                                  },
                    "mode":  "merge"
                },
     "agents":  {
                    "defaults":  {
                                     "model":  {
-                                                  "primary":  "local/qwen2.5-3b-instruct"
+                                                  "primary":  "ollama/qwen2.5:7b-instruct"
                                               },
                                     "models":  {
-                                                   "local/qwen2.5-3b-instruct":  {
-                                                                                     "params":  {
-                                                                                                    "maxTokens":  256,
-                                                                                                    "timeoutMs":  180000,
-                                                                                                    "temperature":  0.2
-                                                                                                }
-                                                                                 }
+                                                   "ollama/qwen2.5:7b-instruct":  {
+                                                                                      "params":  {
+                                                                                                     "maxTokens":  256,
+                                                                                                     "timeoutMs":  180000,
+                                                                                                     "temperature":  0.2
+                                                                                                 }
+                                                                                  }
                                                },
                                     "workspace":  "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\.openclaw\\workspace",
                                     "compaction":  {
@@ -94,7 +94,7 @@
                                                          "sourcePath":  "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\integrations\\openclaw-aegis-guard",
                                                          "installPath":  "C:\\Users\\krimo\\OneDrive\\Desktop\\Aegis\\integrations\\openclaw-aegis-guard",
                                                          "version":  "0.1.0",
-                                                         "installedAt":  "2026-03-05T15:35:03.622Z"
+                                                         "installedAt":  "2026-03-23T23:58:10.487Z"
                                                      }
                                  }
                 }

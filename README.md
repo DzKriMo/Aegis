@@ -27,7 +27,7 @@ Aegis is a policy-driven runtime guardrail layer for agentic systems. It enforce
 - Post-LLM checks: secrets/PII/policy outputs.
 - API key + JWT auth.
 - Event/audit timeline via DB-backed sessions.
-- Optional local llama.cpp classification (Qwen GGUF).
+- Optional local Ollama-backed classification and response generation.
 
 ## Quick Start
 
@@ -41,14 +41,17 @@ Dashboard:
 http://127.0.0.1:8000/v1/dashboard
 ```
 
-## LLM Startup (GPU)
+## Ollama Startup
 
 ```powershell
-.\llama.cpp\llama-server.exe -m models\qwen2.5-3b-instruct-q4_k_m.gguf --port 8080 --n-gpu-layers 35 --ctx-size 2048
+ollama serve
+$env:AEGIS_OLLAMA_BASE_URL="http://127.0.0.1:11434"
 $env:AEGIS_LLM_ENABLED="true"
-$env:AEGIS_LLM_ENDPOINT="http://127.0.0.1:8080/v1/chat/completions"
+$env:AEGIS_LLM_ENDPOINT="http://127.0.0.1:11434/v1/chat/completions"
+$env:AEGIS_LLM_MODEL="qwen2.5:7b-instruct"
 $env:AEGIS_MODEL_ENABLED="true"
-$env:AEGIS_MODEL_ENDPOINT="http://127.0.0.1:8080/v1/chat/completions"
+$env:AEGIS_MODEL_ENDPOINT="http://127.0.0.1:11434/v1/chat/completions"
+$env:AEGIS_MODEL_NAME="qwen2.5:7b-instruct"
 python -m uvicorn aegis.api.main:app --port 8000
 ```
 
@@ -78,8 +81,9 @@ AEGIS_POLICY_VERSION=v1
 AEGIS_DETECTOR_VERSION=v1
 AEGIS_MODEL_HASH=unknown
 AEGIS_MODEL_ENABLED=true
-AEGIS_MODEL_ENDPOINT=http://127.0.0.1:8080/v1/chat/completions
-AEGIS_MODEL_NAME=qwen2.5-3b-instruct
+AEGIS_OLLAMA_BASE_URL=http://127.0.0.1:11434
+AEGIS_MODEL_ENDPOINT=http://127.0.0.1:11434/v1/chat/completions
+AEGIS_MODEL_NAME=qwen2.5:7b-instruct
 AEGIS_MODEL_TIMEOUT=30
 ```
 
@@ -105,7 +109,7 @@ One-command local stack (Aegis + OpenClaw gateway + Aegis OpenClaw plugin config
 .\scripts\run_aegis_openclaw_stack.ps1 -AegisApiKey "<your-key>" -OpenDashboard
 ```
 
-Free local stack (llama.cpp + Aegis + OpenClaw, no paid API keys):
+Free local stack (Ollama + Aegis + OpenClaw, no paid API keys):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_aegis_openclaw_free.ps1 -AegisApiKey "<your-key>" -OpenDashboard

@@ -1,98 +1,430 @@
-﻿<!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Aegis Dashboard</title>
-                <link rel="stylesheet" href="/static/dashboard/dashboard.css" />
-      </head>
-      <body>
-        <header class="topbar">
-          <div class="brand">
-            <div class="logo"></div>
-            <strong>Aegis Guardrail Citadel</strong>
-          </div>
-          <div class="inline">
-            <span id="status" class="status">Disconnected</span>
-            <button class="btn" onclick="refreshAll()">Refresh</button>
-          </div>
-        </header>
-        <div class="shell">
-          <aside class="panel">
-            <div class="title">Access</div>
-            <input id="apiKey" class="input" placeholder="x-api-key" />
-            <div style="height:8px"></div>
-            <button class="btn primary" onclick="saveKey()">Save Key</button>
-            <div class="title">Sessions</div>
-            <input id="sessionSearch" class="input" placeholder="Search session id" oninput="renderSessions()" />
-            <div class="sessions" id="sessions"></div>
-            <div class="title">Quick Payloads</div>
-            <div class="inline">
-              <button class="btn" onclick="seedPayload('pii')">PII</button>
-              <button class="btn" onclick="seedPayload('inject')">Inject</button>
-              <button class="btn" onclick="seedPayload('safe')">Safe</button>
-            </div>
-          </aside>
-          <main class="panel">
-            <section class="kpis">
-              <div class="kpi"><div class="title">Session</div><div class="v" id="sessionId">None</div></div>
-              <div class="kpi"><div class="title">Requests</div><div class="v" id="requestCount">0</div></div>
-              <div class="kpi"><div class="title">Risky</div><div class="v" id="riskyCount">0</div></div>
-              <div class="kpi"><div class="title">Refresh</div><div class="v" id="lastUpdate">-</div></div>
-            </section>
-            <section class="row">
-              <div class="panel">
-                <div class="title">Grouped Request Traces</div>
-                <div class="inline">
-                  <select id="statusFilter" class="select" style="max-width:170px" onchange="renderRequests()">
-                    <option value="">All statuses</option>
-                    <option value="allow">ALLOW</option>
-                    <option value="warn">WARN</option>
-                    <option value="approval">APPROVAL</option>
-                    <option value="block">BLOCK</option>
-                  </select>
-                  <input id="requestSearch" class="input" style="max-width:250px" placeholder="Search content or stages" oninput="renderRequests()" />
-                  <label class="tiny"><input type="checkbox" id="autoRefresh" checked onchange="toggleAutoRefresh()" /> live</label>
-                </div>
-                <div id="requests" class="request-list"></div>
-                <div class="title">Selected Trace</div>
-                <div id="traceInfo" class="tiny">Select a request to inspect stage-by-stage decisions.</div>
-                <div id="trace" class="trace"></div>
-                <div class="title">Test Guarded Message</div>
-                <textarea id="testMessage" class="textarea" placeholder="Send a message through guardrails"></textarea>
-                <div style="height:8px"></div>
-                <div class="inline">
-                  <button class="btn primary" id="sendTestBtn" onclick="sendTestMessage()">Send</button>
-                  <span class="tiny" id="testState">idle</span>
-                </div>
-                <pre id="testResponse" class="term">No test requests yet.</pre>
-              </div>
-              <div class="panel">
-                <div class="title">Outcome Mix</div>
-                <div class="inline">
-                  <span class="pill ok" id="countAllow">allow: 0</span>
-                  <span class="pill warn" id="countWarn">warn: 0</span>
-                  <span class="pill approval" id="countApproval">approval: 0</span>
-                  <span class="pill block" id="countBlock">block: 0</span>
-                </div>
-                <div id="mixBar" class="bar"></div>
-                <div class="title">Risk Trend</div>
-                <svg id="riskSpark" class="spark" viewBox="0 0 320 90" preserveAspectRatio="none"></svg>
-                <div class="title">Classifier Notes</div>
-                <div id="modelNotes" class="tiny">No requests yet.</div>
-                <div class="title">Tool Tester</div>
-                <input id="toolName" class="input" value="shell" placeholder="tool name" />
-                <div style="height:6px"></div>
-                <textarea id="toolPayload" class="textarea" style="min-height:70px">{"command":"echo hello"}</textarea>
-                <div style="height:6px"></div>
-                <input id="toolEnv" class="input" value="dev" placeholder="environment" />
-                <div style="height:8px"></div>
-                <button class="btn" onclick="sendToolTest()">Run Tool Gate</button>
-                <pre id="toolResponse" class="term">No tool tests yet.</pre>
-              </div>
-            </section>
-          </main>
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aegis Dashboard</title>
+    <link rel="stylesheet" href="/static/dashboard/dashboard.css?v=modern2" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle menu">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+        <div class="logo"><img src="../../../logo.png" alt="Aegis Logo" /></div>
+        <div class="brand-text">
+          <strong>Aegis</strong>
+          <div class="subtitle">Guardrail dashboard</div>
         </div>
-                <script src="/static/dashboard/dashboard.js"></script>
-      </body>
-    </html>
+      </div>
+      <div class="topbar-actions">
+        <span id="status" class="connection-status">Disconnected</span>
+        <button class="btn" onclick="refreshAll()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </header>
+
+    <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <div class="app-container">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-section">
+          <section class="card">
+            <div class="card-header">
+              <div class="card-header-left">
+                <span class="card-subtitle">Access</span>
+                <h3 class="card-title">API Configuration</h3>
+              </div>
+            </div>
+            <input id="apiKey" class="input" placeholder="Enter your API key" />
+            <div style="margin-top: 12px;">
+              <button class="btn primary btn-block" onclick="saveKey()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                  <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                  <polyline points="7 3 7 8 15 8"></polyline>
+                </svg>
+                Save Key
+              </button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <div class="card-header-left">
+                <span class="card-subtitle">Sessions</span>
+                <h3 class="card-title">Manage Sessions</h3>
+              </div>
+              <div class="card-actions">
+                <button class="btn ghost sm" onclick="createSessionFromDashboard()" title="New session">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
+                </button>
+                <button class="btn ghost sm danger" onclick="clearAllSessions()" title="Clear all">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <input id="sessionSearch" class="input" placeholder="Search sessions..." oninput="renderSessions()" />
+            <div class="session-list-container">
+              <div id="sessions" class="session-list"></div>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <section class="card hero-card">
+          <div class="hero-content">
+            <div>
+              <h1 class="hero-title" id="sessionTitle">No session selected</h1>
+              <div class="hero-meta" id="sessionMeta">
+                <span>Create a session or choose one from the sidebar</span>
+              </div>
+              <div class="meta-text" id="sessionFullId" style="margin-top: 8px;">Session ID: -</div>
+            </div>
+            <div class="hero-actions">
+              <button class="btn ghost" onclick="copyCurrentSessionId()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                Copy session ID
+              </button>
+              <button class="btn ghost" onclick="refreshAll()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <polyline points="1 20 1 14 7 14"></polyline>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                Refresh
+              </button>
+              <button class="btn ghost" onclick="resetCurrentSessionRisk()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path>
+                  <path d="M3 3v5h5"></path>
+                </svg>
+                Reset risk
+              </button>
+              <button class="btn danger" onclick="deleteCurrentSession()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+                Delete
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <div class="metrics-grid">
+          <div class="metric-card highlight">
+            <span class="metric-label">Total Requests</span>
+            <span class="metric-value" id="requestCount">0</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Risky</span>
+            <span class="metric-value" id="riskyCount">0</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Session Created</span>
+            <span class="metric-value small" id="sessionCreated">-</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Last Updated</span>
+            <span class="metric-value small" id="lastUpdate">-</span>
+          </div>
+        </div>
+
+        <div class="workspace">
+          <div class="workspace-main">
+            <section class="card">
+              <div class="card-header">
+                <div class="card-header-left">
+                  <span class="card-subtitle">Compose</span>
+                  <h3 class="card-title">Message Test</h3>
+                </div>
+                <div class="card-actions">
+                  <button class="btn ghost sm" onclick="seedPayload('safe')">Safe</button>
+                  <button class="btn ghost sm" onclick="seedPayload('inject')">Injection</button>
+                  <button class="btn ghost sm" onclick="seedPayload('pii')">PII</button>
+                </div>
+              </div>
+              <textarea id="testMessage" class="textarea" placeholder="Send a test message through Aegis guardrails..."></textarea>
+              <div class="flex items-center justify-between" style="margin-top: 14px;">
+                <div class="flex items-center gap-md">
+                  <button class="btn primary" id="sendTestBtn" onclick="sendTestMessage()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                    Send
+                  </button>
+                  <span class="text-muted text-sm" id="testState">Ready</span>
+                </div>
+                <label class="checkbox">
+                  <input type="checkbox" id="autoRefresh" checked onchange="toggleAutoRefresh()" />
+                  Auto refresh
+                </label>
+              </div>
+              <pre id="testResponse" class="terminal">No test requests yet.</pre>
+            </section>
+
+            <section class="card">
+              <div class="card-header">
+                <div class="card-header-left">
+                  <span class="card-subtitle">Requests</span>
+                  <h3 class="card-title">Request History</h3>
+                </div>
+              </div>
+              <div class="filter-bar">
+                <select id="statusFilter" class="select" onchange="renderRequests()">
+                  <option value="">All outcomes</option>
+                  <option value="allow">Allow</option>
+                  <option value="warn">Warn</option>
+                  <option value="redact">Redact</option>
+                  <option value="approval">Approval</option>
+                  <option value="block">Block</option>
+                  <option value="runtime_error">Runtime Error</option>
+                </select>
+                <input id="requestSearch" class="input" placeholder="Search requests..." oninput="renderRequests()" />
+              </div>
+              <div class="scroll-container">
+                <div id="requests" class="request-list"></div>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-header">
+                <div class="card-header-left">
+                  <span class="card-subtitle">Trace</span>
+                  <h3 class="card-title">Trace Details</h3>
+                </div>
+              </div>
+              <p class="meta-text" id="traceInfo">Select a request to inspect stage-by-stage decisions.</p>
+              <div id="inspector" class="subsection" style="margin-top: 14px;">
+                <div class="subsection-title">Decision Inspector</div>
+                <p class="meta-text" id="inspectorSummary">Select a request to inspect the normalized Aegis decision.</p>
+              </div>
+              <div id="trace" class="scroll-container" style="margin-top: 14px;"></div>
+            </section>
+          </div>
+
+          <aside class="workspace-side">
+            <section class="card">
+              <div class="card-header">
+                <div class="card-header-left">
+                  <span class="card-subtitle">Overview</span>
+                  <h3 class="card-title">Quick Stats</h3>
+                </div>
+              </div>
+              <div class="pills-row">
+                <span class="pill pill-allow" id="countAllow">allow: 0</span>
+                <span class="pill pill-warn" id="countWarn">warn: 0</span>
+                <span class="pill" id="countRedact">redact: 0</span>
+                <span class="pill pill-approval" id="countApproval">approval: 0</span>
+                <span class="pill pill-block" id="countBlock">block: 0</span>
+                <span class="pill" id="countRuntime">runtime: 0</span>
+              </div>
+              <div class="progress-bar">
+                <div class="progress-segment allow" id="barAllow" style="width: 0%"></div>
+                <div class="progress-segment warn" id="barWarn" style="width: 0%"></div>
+                <div class="progress-segment approval" id="barRedact" style="width: 0%"></div>
+                <div class="progress-segment approval" id="barApproval" style="width: 0%"></div>
+                <div class="progress-segment block" id="barBlock" style="width: 0%"></div>
+                <div class="progress-segment block" id="barRuntime" style="width: 0%"></div>
+              </div>
+              <div class="subsection">
+                <div class="subsection-title">Risk Trend</div>
+                <svg id="riskSpark" class="sparkline" viewBox="0 0 320 60" preserveAspectRatio="none"></svg>
+              </div>
+              <div class="subsection">
+                <div class="subsection-title">Classifier Notes</div>
+                <p class="meta-text" id="modelNotes">No requests yet.</p>
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="card-header">
+                <div class="card-header-left">
+                  <span class="card-subtitle">Controls</span>
+                  <h3 class="card-title">Control Hub</h3>
+                </div>
+              </div>
+              <div class="tab-bar">
+                <button class="tab-btn active" data-tab="runtime" onclick="switchHubTab('runtime')">Runtime</button>
+                <button class="tab-btn" data-tab="approvals" onclick="switchHubTab('approvals')">Approvals</button>
+                <button class="tab-btn" data-tab="tools" onclick="switchHubTab('tools')">Tools</button>
+                <button class="tab-btn" data-tab="policy" onclick="switchHubTab('policy')">Policy</button>
+              </div>
+
+              <div class="tab-panel active" data-panel="runtime">
+                <div class="form-grid">
+                  <div class="form-field">
+                    <label>Bypass Aegis Policy Checks</label>
+                    <label class="toggle-row">
+                      <input id="guardrailsEnabled" type="checkbox" checked />
+                      <span>Policy checks enabled</span>
+                    </label>
+                    <p class="meta-text">Turns Aegis policy enforcement on or off. Tool validation and runtime errors still apply.</p>
+                  </div>
+                  <div class="form-field">
+                    <label>Ollama Model</label>
+                    <select id="modelSelect" class="select" onchange="saveSelectedModel()">
+                      <option value="">Loading models...</option>
+                    </select>
+                  </div>
+                  <div class="form-field">
+                    <label>Verifier Model</label>
+                    <select id="verifierModelSelect" class="select">
+                      <option value="">No verifier</option>
+                    </select>
+                  </div>
+                  <div class="form-field">
+                    <label>Profile</label>
+                    <select id="profileSelect" class="select">
+                      <option value="strict">strict</option>
+                      <option value="balanced" selected>balanced</option>
+                      <option value="assist">assist</option>
+                    </select>
+                  </div>
+                  <div class="form-field">
+                    <label>Tenant Pack</label>
+                    <select id="tenantPackSelect" class="select" onchange="updateTenantPackMeta()"></select>
+                  </div>
+                  <div class="form-field">
+                    <label>Approval Threshold</label>
+                    <input id="approvalThreshold" class="input" placeholder="0.75" />
+                  </div>
+                  <div class="form-field">
+                    <label>Block Threshold</label>
+                    <input id="blockThreshold" class="input" placeholder="1.10" />
+                  </div>
+                </div>
+                <div class="subsection">
+                  <p class="meta-text" id="modelMeta">No model metadata yet.</p>
+                  <p class="meta-text" id="tenantPackMeta">No pack loaded.</p>
+                  <p class="meta-text" id="controlState">No control state yet.</p>
+                </div>
+                <button class="btn primary btn-block" onclick="saveControlSettings()">Apply Controls</button>
+              </div>
+
+              <div class="tab-panel" data-panel="approvals">
+                <div class="scroll-container" style="max-height: 200px;">
+                  <div id="approvalList" class="request-list"></div>
+                </div>
+                <div class="form-grid">
+                  <div class="form-field">
+                    <label>Actor</label>
+                    <input id="approvalActor" class="input" value="dashboard" placeholder="actor" />
+                  </div>
+                  <div class="form-field">
+                    <label>Scope</label>
+                    <select id="approvalScope" class="select">
+                      <option value="exact">exact</option>
+                      <option value="stage">stage</option>
+                      <option value="tool">tool</option>
+                      <option value="session">session</option>
+                      <option value="tenant">tenant</option>
+                    </select>
+                  </div>
+                </div>
+                <input id="approvalReason" class="input" placeholder="Reason for approval" style="margin-top: 12px;" />
+                <pre id="approvalResponse" class="terminal small" style="margin-top: 12px;">No approvals yet.</pre>
+              </div>
+
+              <div class="tab-panel" data-panel="tools">
+                <div class="form-field">
+                  <label>Tool Name</label>
+                  <input id="toolName" class="input" value="shell" placeholder="tool name" />
+                </div>
+                <div class="form-field" style="margin-top: 12px;">
+                  <label>Payload</label>
+                  <textarea id="toolPayload" class="textarea compact">{"command":"echo hello"}</textarea>
+                </div>
+                <div class="form-field" style="margin-top: 12px;">
+                  <label>Environment</label>
+                  <input id="toolEnv" class="input" value="dev" placeholder="environment" />
+                </div>
+                <button class="btn primary btn-block" onclick="sendToolTest()" style="margin-top: 14px;">Run Tool Gate</button>
+                <pre id="toolResponse" class="terminal small" style="margin-top: 12px;">No tool tests yet.</pre>
+              </div>
+
+              <div class="tab-panel" data-panel="policy">
+                <div class="form-field">
+                  <label>Content to Simulate</label>
+                  <textarea id="simulateContent" class="textarea compact" placeholder="Enter content to test against policies"></textarea>
+                </div>
+                <div class="form-grid" style="margin-top: 12px;">
+                  <div class="form-field">
+                    <label>Stage</label>
+                    <select id="simulateStage" class="select">
+                      <option value="prellm">prellm</option>
+                      <option value="postllm">postllm</option>
+                      <option value="tool_pre">tool_pre</option>
+                      <option value="tool_post">tool_post</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-field" style="margin-top: 12px;">
+                  <label>Candidate Policies (Optional)</label>
+                  <textarea id="candidatePolicies" class="textarea compact" placeholder='["policy1", "policy2"]'></textarea>
+                </div>
+                <div class="form-grid" style="margin-top: 12px;">
+                  <div class="form-field">
+                    <label>Saved Snapshot</label>
+                    <select id="snapshotSelect" class="select">
+                      <option value="">Current policies</option>
+                    </select>
+                  </div>
+                  <div class="form-field">
+                    <label>Snapshot Name</label>
+                    <input id="snapshotName" class="input" placeholder="e.g. pre-redaction-tuning" />
+                  </div>
+                </div>
+                <div class="flex gap-sm" style="margin-top: 14px;">
+                  <button class="btn primary" onclick="runPolicySimulation()" style="flex: 1;">Policy Diff</button>
+                  <button class="btn" onclick="savePolicySnapshot()">Save Snapshot</button>
+                  <button class="btn" onclick="runPolicyReplayCompare()">Replay Compare</button>
+                  <button class="btn" onclick="runRedTeam()">Red Team</button>
+                </div>
+                <pre id="snapshotResponse" class="terminal small" style="margin-top: 12px;">No snapshots yet.</pre>
+                <pre id="simulateResponse" class="terminal small" style="margin-top: 12px;">No simulation yet.</pre>
+                <pre id="redTeamResponse" class="terminal small" style="margin-top: 12px;">No red-team runs yet.</pre>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </main>
+    </div>
+
+    <script src="/static/dashboard/dashboard.js?v=modern2"></script>
+    <script>
+      function toggleSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.querySelector('.sidebar-overlay');
+        sidebar.classList.toggle('open');
+        overlay.classList.toggle('visible');
+      }
+    </script>
+  </body>
+</html>

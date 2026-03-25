@@ -1,0 +1,14 @@
+-r ..\requirements.txt
+
+# Optional: Enhanced agent capabilities
+pillow>=10.0.0          # Image processing
+pytesseract>=0.3.10     # OCR for vision
+langdetect>=1.0.9       # Language detection
+mss>=9.0.1             # Screen capture
+pypdf>=4.0.0           # PDF processing
+python-docx>=1.0.0     # Word document processing
+openpyxl>=3.1.0        # Excel processing
+pydantic>=2.6          # Data validation
+numpy>=1.26.0          # Numerical operations
+pandas>=2.0.0          # Data analysis
+matplotlib>=3.8.0      # Plotting
