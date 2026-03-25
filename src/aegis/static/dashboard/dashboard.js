@@ -9,6 +9,7 @@ let autoRefreshTimer = null;
 let ollamaModels = [];
 let controlSettings = {};
 let tenantPacks = {};
+let policySnapshots = [];
 let activeHubTab = 'runtime';
 
 function getKey() {
@@ -65,12 +66,16 @@ function outcomeOfDecision(decision) {
   const d = decision || {};
   if (d.blocked) return 'block';
   if (d.require_approval) return 'approval';
+  if (d.redact) return 'redact';
   if (d.warn) return 'warn';
   return 'allow';
 }
 
 function eventState(e) {
+  if (e && e.outcome) return e.outcome;
   if (e && e.decision) return outcomeOfDecision(e.decision);
+  const msg = String((e && e.message) || '').toLowerCase();
+  if (msg && (msg.includes('failed') || msg.includes('error') || msg.includes('exception'))) return 'runtime_error';
   return 'info';
 }
 
@@ -103,12 +108,10 @@ function summarizeEvent(e) {
 
 function inferOutcome(events) {
   let out = 'allow';
+  const severity = { allow: 0, warn: 1, redact: 2, approval: 3, block: 4, runtime_error: 5 };
   for (const e of events) {
-    if (!e.decision) continue;
-    const x = outcomeOfDecision(e.decision);
-    if (x === 'block') return 'block';
-    if (x === 'approval') out = out === 'block' ? out : 'approval';
-    else if (x === 'warn' && out === 'allow') out = 'warn';
+    const x = e.outcome || (e.decision ? outcomeOfDecision(e.decision) : eventState(e));
+    if ((severity[x] || 0) > (severity[out] || 0)) out = x;
   }
   return out;
 }
@@ -160,7 +163,9 @@ function groupRequests(events) {
 function badge(s) {
   if (s === 'block') return '<span class="pill pill-block">BLOCK</span>';
   if (s === 'approval') return '<span class="pill pill-approval">APPROVAL</span>';
+  if (s === 'redact') return '<span class="pill">REDACT</span>';
   if (s === 'warn') return '<span class="pill pill-warn">WARN</span>';
+  if (s === 'runtime_error') return '<span class="pill pill-block">RUNTIME</span>';
   if (s === 'info') return '<span class="pill">INFO</span>';
   return '<span class="pill pill-allow">ALLOW</span>';
 }
@@ -247,18 +252,22 @@ function renderSessions() {
 }
 
 function renderMix(groups) {
-  const c = { allow: 0, warn: 0, approval: 0, block: 0 };
+  const c = { allow: 0, warn: 0, redact: 0, approval: 0, block: 0, runtime_error: 0 };
   groups.forEach((g) => { c[g.outcome] += 1; });
   document.getElementById('countAllow').textContent = `allow: ${c.allow}`;
   document.getElementById('countWarn').textContent = `warn: ${c.warn}`;
+  document.getElementById('countRedact').textContent = `redact: ${c.redact}`;
   document.getElementById('countApproval').textContent = `approval: ${c.approval}`;
   document.getElementById('countBlock').textContent = `block: ${c.block}`;
-  document.getElementById('riskyCount').textContent = String(c.warn + c.approval + c.block);
+  document.getElementById('countRuntime').textContent = `runtime: ${c.runtime_error}`;
+  document.getElementById('riskyCount').textContent = String(c.warn + c.redact + c.approval + c.block + c.runtime_error);
   const t = Math.max(groups.length, 1);
   document.getElementById('barAllow').style.width = `${(c.allow / t) * 100}%`;
   document.getElementById('barWarn').style.width = `${(c.warn / t) * 100}%`;
+  document.getElementById('barRedact').style.width = `${(c.redact / t) * 100}%`;
   document.getElementById('barApproval').style.width = `${(c.approval / t) * 100}%`;
   document.getElementById('barBlock').style.width = `${(c.block / t) * 100}%`;
+  document.getElementById('barRuntime').style.width = `${(c.runtime_error / t) * 100}%`;
 }
 
 function renderSpark(groups) {
@@ -350,7 +359,10 @@ function renderControlSettings(data) {
   if (approval) approval.value = String(controlSettings.action_risk_approval_threshold ?? '');
   if (block) block.value = String(controlSettings.action_risk_block_threshold ?? '');
   if (guardrailsSwitch) guardrailsSwitch.checked = Boolean(controlSettings.guardrails_enabled !== false);
-  if (state) state.textContent = `Aegis ${controlSettings.guardrails_enabled === false ? 'disabled' : 'enabled'} • Consensus ${controlSettings.consensus_enabled ? 'enabled' : 'disabled'} • verifier ${controlSettings.verifier_model || 'none'} • approval TTL ${controlSettings.approval_default_ttl_seconds || 0}s`;
+  if (state) {
+    const guardrailMode = controlSettings.guardrails_enabled === false ? 'Policy checks bypassed' : 'Policy checks enforced';
+    state.textContent = `${guardrailMode} • Consensus ${controlSettings.consensus_enabled ? 'enabled' : 'disabled'} • verifier ${controlSettings.verifier_model || 'none'} • approval TTL ${controlSettings.approval_default_ttl_seconds || 0}s`;
+  }
 }
 
 async function loadControlSettings() {
@@ -492,6 +504,67 @@ async function runPolicySimulation() {
   out.textContent = JSON.stringify(res, null, 2);
 }
 
+function renderPolicySnapshots(data) {
+  policySnapshots = (data && data.snapshots) || [];
+  const select = document.getElementById('snapshotSelect');
+  const out = document.getElementById('snapshotResponse');
+  if (select) {
+    select.innerHTML = `<option value="">Current policies</option>${policySnapshots.map((item) => `<option value="${item.id}">${item.name}</option>`).join('')}`;
+  }
+  if (out && policySnapshots.length) {
+    const latest = policySnapshots[0];
+    out.textContent = `Latest snapshot: ${latest.name} (${formatDateTime(latest.created_at)})`;
+  } else if (out) {
+    out.textContent = 'No snapshots yet.';
+  }
+}
+
+async function loadPolicySnapshots() {
+  try {
+    const data = await api('/policy-snapshots');
+    renderPolicySnapshots(data);
+  } catch (e) {
+    const out = document.getElementById('snapshotResponse');
+    if (out) out.textContent = 'Failed to load snapshots: ' + String(e);
+  }
+}
+
+async function savePolicySnapshot() {
+  const out = document.getElementById('snapshotResponse');
+  let candidate = null;
+  const rawCandidate = (document.getElementById('candidatePolicies').value || '').trim();
+  if (rawCandidate) candidate = JSON.parse(rawCandidate);
+  const name = (document.getElementById('snapshotName').value || '').trim() || `snapshot-${new Date().toISOString()}`;
+  const res = await api('/policy-snapshots', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, policies: candidate }),
+  });
+  out.textContent = JSON.stringify(res, null, 2);
+  await loadPolicySnapshots();
+}
+
+async function runPolicyReplayCompare() {
+  const out = document.getElementById('simulateResponse');
+  if (!currentSession) {
+    out.textContent = 'Select a session first.';
+    return;
+  }
+  let candidate = null;
+  const rawCandidate = (document.getElementById('candidatePolicies').value || '').trim();
+  if (rawCandidate) candidate = JSON.parse(rawCandidate);
+  const snapshotId = (document.getElementById('snapshotSelect').value || '').trim();
+  const res = await api(`/replay/session/${currentSession}/compare-policy`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      snapshot_id: snapshotId || null,
+      candidate_policies: candidate,
+    }),
+  });
+  out.textContent = JSON.stringify(res, null, 2);
+}
+
 async function runRedTeam() {
   const out = document.getElementById('redTeamResponse');
   out.textContent = 'running...';
@@ -510,12 +583,26 @@ async function runRedTeam() {
 function renderTrace(group) {
   const info = document.getElementById('traceInfo');
   const trace = document.getElementById('trace');
+  const inspector = document.getElementById('inspectorSummary');
   if (!group) {
     info.textContent = 'Select a request to inspect stage-by-stage decisions.';
+    if (inspector) inspector.textContent = 'Select a request to inspect the normalized Aegis decision.';
     trace.innerHTML = '';
     return;
   }
   info.textContent = `${group.flow.toUpperCase()} trace • ${group.id.slice(0, 8)}... • risk ${group.risk.toFixed(2)}`;
+  if (inspector) {
+    const ins = group.inspector || {};
+    const parts = [
+      `Outcome: ${(ins.outcome || group.outcome || 'allow').toUpperCase()}`,
+      `Risk: ${Number(ins.risk ?? group.risk ?? 0).toFixed(2)}`,
+      ins.primary_reason ? `Reason: ${ins.primary_reason}` : null,
+      (ins.matched_rules || []).length ? `Rules: ${(ins.matched_rules || []).join(', ')}` : null,
+      (ins.signal_notes || []).length ? `Signals: ${(ins.signal_notes || []).join(' | ')}` : null,
+      (ins.transform_stages || []).length ? `Transforms: ${(ins.transform_stages || []).join(', ')}` : null,
+    ].filter(Boolean);
+    inspector.textContent = parts.join(' • ');
+  }
   trace.innerHTML = '';
   group.events.forEach((e, idx) => {
     const d = document.createElement('div');
@@ -579,6 +666,28 @@ function renderRequests() {
   const selected = groups.find((g) => g.id === selectedRequestId) || null;
   renderTrace(selected);
   renderModelNotes(selected);
+}
+
+function mapRequestSummaries(detail) {
+  const events = detail.events || [];
+  return (detail.request_summaries || []).map((item) => {
+    const requestId = item.id;
+    const groupedEvents = events.filter((ev, idx) => {
+      if (ev.request_id) return String(ev.request_id) === requestId;
+      return requestId === `legacy-${idx}`;
+    });
+    return {
+      id: requestId,
+      flow: item.flow || 'message',
+      events: groupedEvents,
+      outcome: item.outcome || inferOutcome(groupedEvents),
+      risk: Number(item.risk || getRisk(groupedEvents) || 0),
+      input: item.input_excerpt || '',
+      note: '',
+      ts: Number(item.ts || ((groupedEvents[groupedEvents.length - 1] || {}).ts || 0)),
+      inspector: item.inspector || null,
+    };
+  });
 }
 
 function toggleRaw(id) {
@@ -682,7 +791,7 @@ async function loadSessionDetail() {
   try {
     const data = await api(`/sessions/${currentSession}`);
     currentSessionDetail = data;
-    requestGroups = groupRequests(data.events || []);
+    requestGroups = (data.request_summaries || []).length ? mapRequestSummaries(data) : groupRequests(data.events || []);
     renderSessionSummary();
     renderRequests();
     await loadApprovals();
@@ -696,6 +805,7 @@ async function refreshAll() {
   await loadSessions();
   await loadControlSettings();
   await loadTenantPacks();
+  await loadPolicySnapshots();
   await loadOllamaModels();
   if (currentSession) await loadSessionDetail();
 }
@@ -795,6 +905,8 @@ window.saveSelectedModel = saveSelectedModel;
 window.saveControlSettings = saveControlSettings;
 window.approvePending = approvePending;
 window.runPolicySimulation = runPolicySimulation;
+window.runPolicyReplayCompare = runPolicyReplayCompare;
+window.savePolicySnapshot = savePolicySnapshot;
 window.runRedTeam = runRedTeam;
 window.updateTenantPackMeta = updateTenantPackMeta;
 window.saveKey = saveKey;

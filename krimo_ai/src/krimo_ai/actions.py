@@ -48,6 +48,7 @@ def parse_loose_tool_call(text: str) -> Optional[dict[str, Any]]:
         "browser_click",
         "browser_type",
         "browser_snapshot",
+        "browser_scroll",
         "browser_screenshot",
         "json_transform",
         "file_find",
@@ -104,6 +105,7 @@ def parse_agent_action(text: str) -> dict[str, Any]:
                 "browser_click",
                 "browser_type",
                 "browser_snapshot",
+                "browser_scroll",
                 "browser_screenshot",
                 "json_transform",
                 "file_find",
@@ -164,7 +166,20 @@ def extract_json_blob(text: str) -> Optional[Any]:
 def detect_direct_tool_intent(user_text: str, web_results: list[dict[str, str]], page_links: list[dict[str, str]]) -> Optional[dict[str, Any]]:
     text = user_text.strip()
     lower = text.lower()
-    interaction_requested = any(token in lower for token in ["interact", "click around", "explore the page", "inspect the page"])
+    interaction_requested = any(
+        token in lower
+        for token in [
+            "interact",
+            "click around",
+            "explore the page",
+            "inspect the page",
+            "wait for",
+            "let it load",
+            "after it loads",
+            "tell me what do you think",
+            "what do you think about it",
+        ]
+    )
     ocr_match = re.match(r"^(?:use your ocr to read the text in|ocr|read text from image|extract text from image)\s+(.+)$", text, re.IGNORECASE)
     if ocr_match:
         path = ocr_match.group(1).strip().strip("\"'")
@@ -182,7 +197,13 @@ def detect_direct_tool_intent(user_text: str, web_results: list[dict[str, str]],
     browse_match = re.match(r"^(?:browse|browser open|browser navigate|navigate browser to|naviguate to)\s+(\S+)(?:\s+.*)?$", text, re.IGNORECASE)
     if browse_match:
         url = _normalize_web_url(browse_match.group(1))
-        return {"action": "tool", "tool_name": "browser_navigate", "payload": {"url": url, "wait_ms": 2500 if interaction_requested else 1200}, "mode": "browser_explore" if interaction_requested else "fast", "guard_text": f"Navigate the browser to {url}."}
+        return {
+            "action": "tool",
+            "tool_name": "browser_navigate",
+            "payload": {"url": url, "wait_ms": 3500 if interaction_requested else 1200},
+            "mode": "browser_explore" if interaction_requested else "fast",
+            "guard_text": f"Navigate the browser to {url}.",
+        }
     open_result_match = re.match(r"^open result\s+(\d+)$", lower, re.IGNORECASE)
     if open_result_match:
         idx = int(open_result_match.group(1)) - 1

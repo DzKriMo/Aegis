@@ -12,6 +12,7 @@ from .config import AGENT_ENV, FILESYSTEM_ROOT, MODEL_STREAM_ENABLED
 from .memory import AgentMemory
 from .modeling import add_line_references, model_chat
 from .rendering import compact_tool_result, exact_file_read_answer, wants_exact_file_read, wants_summary
+from .vision import VisionCapabilities
 
 
 PII_INPUT_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b|\b(?:\d[ -]*?){13,19}\b", re.IGNORECASE)
@@ -199,9 +200,17 @@ def execute_agent_tool_action(adapter: AegisAgentAdapter, client: AegisClient, s
         action = fallback_action
     if not tool_res.get("allowed", False):
         message = str(tool_res.get("message") or "Tool failed")
-        if message.lower() == "unknown tool" or "unknown tool" in message.lower():
+        lowered = message.lower()
+        if lowered == "unknown tool" or "unknown tool" in lowered:
             return f"Tool/runtime error: {message}", output_metadata
-        if "valid http/https url" in message.lower() or "browser automation unavailable" in message.lower():
+        if (
+            "valid http/https url" in lowered
+            or "browser automation unavailable" in lowered
+            or "path does not exist" in lowered
+            or "no such file" in lowered
+            or "failed:" in lowered
+            or "unavailable" in lowered
+        ):
             return f"Tool/runtime error: {message}", output_metadata
         return f"Tool blocked by Aegis: {message}", output_metadata
     print(f"[agent] tool_allowed={action['tool_name']}")
@@ -235,25 +244,116 @@ def _pick_primary_button(result: Dict[str, Any]) -> str:
     return ""
 
 
+def _looks_like_transitional_boot_screen(text_preview: str) -> bool:
+    lowered = text_preview.lower()
+    boot_tokens = [
+        "bios version",
+        "booting",
+        "initializing",
+        "storage devices",
+        "virtual vfs",
+        "boot process",
+        "system ready",
+        "guest",
+    ]
+    return sum(1 for token in boot_tokens if token in lowered) >= 2
+
+
+def _looks_like_login_gate(result: Dict[str, Any]) -> bool:
+    text_preview = str(result.get("text_preview") or "").lower()
+    buttons = list(result.get("buttons") or [])
+    inputs = list(result.get("inputs") or [])
+    gate_tokens = [
+        "authorize",
+        "unlock",
+        "login",
+        "log in",
+        "sign in",
+        "guest",
+        "system ready",
+        "biometric",
+        "ready",
+    ]
+    button_text = " ".join(str(item.get("text") or "").lower() for item in buttons)
+    return bool(buttons) and (any(token in text_preview for token in gate_tokens) or any(token in button_text for token in gate_tokens) or bool(inputs))
+
+
+def _looks_like_real_content_view(result: Dict[str, Any]) -> bool:
+    text_preview = str(result.get("text_preview") or "")
+    lowered = text_preview.lower()
+    link_count = int(result.get("link_count") or 0)
+    headings = list(result.get("headings") or [])
+    buttons = list(result.get("buttons") or [])
+    if _looks_like_transitional_boot_screen(text_preview):
+        return False
+    if _looks_like_login_gate(result):
+        return False
+    if any(token in lowered for token in ["portfolio", "about", "projects", "experience", "contact", "skills"]):
+        return True
+    if len(text_preview) >= 280 and (link_count >= 2 or len(headings) >= 2):
+        return True
+    if len(text_preview) >= 500 and len(buttons) <= 2:
+        return True
+    return False
+
+
+def _describe_browser_screenshot(path: str) -> str:
+    try:
+        vision = VisionCapabilities()
+        vision_result = vision.analyze_image_file(path)
+    except Exception as exc:
+        return f"visual analysis unavailable: {exc}"
+    if not vision_result.success:
+        return f"visual analysis unavailable: {vision_result.error or 'unknown error'}"
+    description = (vision_result.description or "").strip()
+    return description[:600] if description else "visual analysis produced no description"
+
+
 def _explore_browser_state(adapter: AegisAgentAdapter, client: AegisClient, session_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
     current = result
-    for _ in range(3):
+    for _ in range(5):
         text_preview = str(current.get("text_preview") or "")
         buttons = list(current.get("buttons") or [])
+        inputs = list(current.get("inputs") or [])
+        if _looks_like_real_content_view(current):
+            current["auto_reached_content"] = True
+            break
+        if _looks_like_transitional_boot_screen(text_preview) and not buttons and not inputs:
+            snapshot_res = execute_tool_with_approvals(adapter, client, session_id, "browser_snapshot", {"wait_ms": 2600})
+            if snapshot_res.get("allowed") and isinstance(snapshot_res.get("result"), dict):
+                current = snapshot_res["result"]
+                current["auto_waited_for_transition"] = True
+                continue
         selector = _pick_primary_button(current)
-        if selector and any(token in text_preview.lower() for token in ["authorize", "unlock", "ready", "guest", "login", "system ready"]):
+        if selector and _looks_like_login_gate(current):
             click_res = execute_tool_with_approvals(adapter, client, session_id, "browser_click", {"selector": selector})
             if click_res.get("allowed") and isinstance(click_res.get("result"), dict):
                 current = click_res["result"]
                 current["auto_interacted"] = True
                 current["auto_selector"] = selector
                 continue
+        if not _looks_like_real_content_view(current) and len(text_preview) < 260:
+            scroll_res = execute_tool_with_approvals(adapter, client, session_id, "browser_scroll", {"pixels": 1100})
+            if scroll_res.get("allowed") and isinstance(scroll_res.get("result"), dict):
+                current = scroll_res["result"]
+                current["auto_scrolled"] = True
+                continue
         snapshot_res = execute_tool_with_approvals(adapter, client, session_id, "browser_snapshot", {"wait_ms": 1800})
         if snapshot_res.get("allowed") and isinstance(snapshot_res.get("result"), dict):
             current = snapshot_res["result"]
-            if current.get("buttons") or len(str(current.get("text_preview") or "")) > max(80, len(text_preview)):
+            if _looks_like_real_content_view(current):
+                current["auto_reached_content"] = True
+                break
+            if current.get("buttons") or current.get("inputs") or len(str(current.get("text_preview") or "")) > max(80, len(text_preview)):
                 continue
         break
+    if not _looks_like_real_content_view(current):
+        screenshot_res = execute_tool_with_approvals(adapter, client, session_id, "browser_screenshot", {})
+        if screenshot_res.get("allowed") and isinstance(screenshot_res.get("result"), dict):
+            current.update(screenshot_res["result"])
+            screenshot_path = str(current.get("screenshot_path") or "")
+            if screenshot_path:
+                current["vision_summary"] = _describe_browser_screenshot(screenshot_path)
     return current
 
 

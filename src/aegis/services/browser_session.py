@@ -61,6 +61,7 @@ def _page_snapshot(page: Any, max_links: int = 20) -> Dict[str, Any]:
     links = []
     buttons = []
     inputs = []
+    headings = []
     try:
         anchors = page.locator("a").all()[:max_links]
         for idx, anchor in enumerate(anchors, start=1):
@@ -101,6 +102,17 @@ def _page_snapshot(page: Any, max_links: int = 20) -> Dict[str, Any]:
                 continue
     except Exception:
         pass
+    try:
+        heading_nodes = page.locator("h1, h2, h3, [role='heading']").all()[:12]
+        for idx, node in enumerate(heading_nodes, start=1):
+            try:
+                text_label = re.sub(r"\s+", " ", node.inner_text(timeout=1000) or "").strip()
+                if text_label:
+                    headings.append({"index": idx, "text": text_label[:240]})
+            except Exception:
+                continue
+    except Exception:
+        pass
     return {
         "url": url,
         "title": title,
@@ -109,6 +121,7 @@ def _page_snapshot(page: Any, max_links: int = 20) -> Dict[str, Any]:
         "link_count": len(links),
         "buttons": buttons,
         "inputs": inputs,
+        "headings": headings,
     }
 
 
@@ -151,6 +164,18 @@ def browser_type(session_id: str, selector: str, text: str, submit: bool = False
     snap = _page_snapshot(state.page)
     snap["typed_selector"] = selector
     snap["submitted"] = submit
+    return snap
+
+
+def browser_scroll(session_id: str, pixels: int = 900) -> Dict[str, Any]:
+    state = _ensure_session(session_id)
+    state.page.evaluate("(value) => window.scrollBy(0, value)", int(pixels))
+    try:
+        state.page.wait_for_timeout(900)
+    except Exception:
+        pass
+    snap = _page_snapshot(state.page)
+    snap["scrolled_pixels"] = int(pixels)
     return snap
 
 

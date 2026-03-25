@@ -79,6 +79,13 @@ _TOOLS: Dict[str, ToolPolicy] = {
         timeout_seconds=8,
         max_bytes=96 * 1024,
     ),
+    "browser_scroll": ToolPolicy(
+        name="browser_scroll",
+        allowed_envs=["dev"],
+        allowlist=[],
+        timeout_seconds=8,
+        max_bytes=96 * 1024,
+    ),
     "browser_screenshot": ToolPolicy(
         name="browser_screenshot",
         allowed_envs=["dev"],

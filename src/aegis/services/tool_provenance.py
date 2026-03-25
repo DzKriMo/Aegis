@@ -22,6 +22,7 @@ def assess_tool_provenance(tool_name: str, environment: str | None, result: Any)
         "browser_click": 0.58,
         "browser_type": 0.56,
         "browser_snapshot": 0.58,
+        "browser_scroll": 0.58,
         "browser_screenshot": 0.6,
     }
     score = float(score_map.get(tool_name, 0.5))

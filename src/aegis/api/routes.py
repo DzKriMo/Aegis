@@ -17,6 +17,7 @@ from ..runtime.tool_registry import get_all_tool_policies
 from ..services.ollama import list_ollama_models, ollama_base_url
 from ..services.control_plane import get_control_settings, get_tenant_packs, update_control_settings, update_tenant_packs
 from ..services.redteam import run_redteam_suite
+from ..services.policy_snapshots import create_policy_snapshot, list_policy_snapshots, load_policy_snapshot
 from ..policies.engine import PolicyEngine
 from ..agent.krimo_service import AgentMemory, LocalAegisClient, run_turn
 
@@ -189,6 +190,16 @@ class RedTeamRunRequest(BaseModel):
     dataset_path: Optional[str] = None
 
 
+class PolicySnapshotCreateRequest(BaseModel):
+    name: str
+    policies: Optional[List[Dict[str, Any]]] = None
+
+
+class ReplayCompareRequest(BaseModel):
+    snapshot_id: Optional[str] = None
+    candidate_policies: Optional[List[Dict[str, Any]]] = None
+
+
 class KrimoAgentRequest(BaseModel):
     content: str
     session_id: Optional[str] = None
@@ -241,6 +252,247 @@ def _derive_session_title(content: str) -> str:
     if len(text) > 72:
         text = text[:69].rstrip() + "..."
     return text
+
+
+def _normalized_outcome(decision: Optional[Dict[str, Any]] = None, event: Optional[Dict[str, Any]] = None) -> str:
+    d = decision or {}
+    e = event or {}
+    if d.get("blocked"):
+        return "block"
+    if d.get("require_approval"):
+        return "approval"
+    if d.get("redact"):
+        return "redact"
+    if d.get("warn"):
+        return "warn"
+    message = str(e.get("message") or "")
+    stage = str(e.get("stage") or "")
+    if message and any(token in message.lower() for token in ["failed", "error", "exception"]):
+        return "runtime_error"
+    if stage.endswith(".transform"):
+        return "redact"
+    return "allow"
+
+
+def _request_input_excerpt(events: List[Dict[str, Any]]) -> str:
+    for ev in events:
+        for key in ("content", "input"):
+            value = ev.get(key)
+            if isinstance(value, str) and value.strip():
+                return value[:220]
+    return ""
+
+
+def _collect_request_summaries(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[str, Dict[str, Any]] = {}
+    ordered: List[Dict[str, Any]] = []
+    for idx, event in enumerate(events):
+        request_id = str(event.get("request_id") or f"legacy-{idx}")
+        group = grouped.get(request_id)
+        if group is None:
+            group = {"id": request_id, "flow": event.get("flow") or "message", "events": []}
+            grouped[request_id] = group
+            ordered.append(group)
+        group["events"].append(event)
+        if event.get("flow"):
+            group["flow"] = event.get("flow")
+
+    summaries: List[Dict[str, Any]] = []
+    severity = {"runtime_error": 5, "block": 4, "approval": 3, "redact": 2, "warn": 1, "allow": 0}
+    for group in ordered:
+        req_events = list(group["events"])
+        stage_items: List[Dict[str, Any]] = []
+        top_outcome = "allow"
+        top_risk = 0.0
+        primary_reason: Optional[str] = None
+        transform_stages: List[str] = []
+        signal_notes: List[str] = []
+        matched_rules: List[str] = []
+
+        for ev in req_events:
+            decision = ev.get("decision") if isinstance(ev.get("decision"), dict) else None
+            outcome = _normalized_outcome(decision, ev)
+            risk_value = 0.0
+            if isinstance(decision, dict):
+                risk_value = float(decision.get("risk_score") or 0.0)
+                matched_rules.extend(str(x) for x in (decision.get("matched_rules") or []) if str(x))
+            if isinstance(ev.get("final_risk"), (int, float)):
+                risk_value = max(risk_value, float(ev.get("final_risk") or 0.0))
+            if isinstance(ev.get("message_risk"), (int, float)):
+                risk_value = max(risk_value, float(ev.get("message_risk") or 0.0))
+            top_risk = max(top_risk, risk_value)
+            if severity[outcome] > severity[top_outcome]:
+                top_outcome = outcome
+            if primary_reason is None and outcome in {"block", "approval", "redact", "warn", "runtime_error"}:
+                primary_reason = str((decision or {}).get("message") or ev.get("message") or ev.get("stage") or "").strip() or None
+            if str(ev.get("stage") or "").endswith(".transform"):
+                transform_stages.append(str(ev.get("stage")))
+            if ev.get("stage") == "llm_classification" and isinstance(ev.get("classification"), dict):
+                flags = [k for k, v in ev["classification"].items() if not str(k).startswith("__") and v is True]
+                if flags:
+                    signal_notes.append(f"LLM: {', '.join(flags)}")
+                elif ev["classification"].get("__error__"):
+                    signal_notes.append(f"LLM error: {ev['classification']['__error__']}")
+            if ev.get("stage") == "local_classification" and isinstance(ev.get("classification"), dict):
+                cls = ev["classification"]
+                if cls.get("enabled") is False:
+                    signal_notes.append("Local classifier disabled")
+                else:
+                    signal_notes.append(f"Local: {cls.get('label') or 'ALLOW'}")
+            if ev.get("stage") == "llm_consensus":
+                disagreements = ev.get("disagreements") or []
+                signal_notes.append("Consensus disagreement" if disagreements else "Consensus matched")
+
+            stage_items.append(
+                {
+                    "stage": ev.get("stage") or "event",
+                    "outcome": outcome,
+                    "message": str((decision or {}).get("message") or ev.get("message") or "").strip() or None,
+                    "risk_score": risk_value,
+                    "matched_rules": list((decision or {}).get("matched_rules") or []),
+                    "timestamp": ev.get("ts"),
+                    "timestamp_readable": ev.get("ts_readable"),
+                }
+            )
+
+        summaries.append(
+            {
+                "id": group["id"],
+                "flow": group["flow"],
+                "input_excerpt": _request_input_excerpt(req_events),
+                "outcome": top_outcome,
+                "risk": top_risk,
+                "event_count": len(req_events),
+                "ts": (req_events[-1] or {}).get("ts") if req_events else 0,
+                "inspector": {
+                    "request_id": group["id"],
+                    "flow": group["flow"],
+                    "outcome": top_outcome,
+                    "risk": round(top_risk, 4),
+                    "input_excerpt": _request_input_excerpt(req_events),
+                    "primary_reason": primary_reason,
+                    "matched_rules": list(dict.fromkeys(matched_rules)),
+                    "transform_stages": transform_stages,
+                    "signal_notes": list(dict.fromkeys(signal_notes)),
+                    "stages": stage_items,
+                },
+            }
+        )
+    summaries.sort(key=lambda item: float(item.get("ts") or 0), reverse=True)
+    return summaries
+
+
+def _evaluate_label_from_decision(decision: Any) -> str:
+    if getattr(decision, "blocked", False):
+        return "block"
+    if getattr(decision, "require_approval", False):
+        return "approval"
+    if getattr(decision, "redact", False):
+        return "redact"
+    if getattr(decision, "warn", False):
+        return "warn"
+    return "allow"
+
+
+def _candidate_policies_from_request(snapshot_id: Optional[str], candidate_policies: Optional[List[Dict[str, Any]]]) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if candidate_policies:
+        return candidate_policies, {"mode": "candidate_inline", "snapshot_id": None}
+    if snapshot_id:
+        snapshot = load_policy_snapshot(snapshot_id)
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="Policy snapshot not found")
+        return list(snapshot.get("policies") or []), {
+            "mode": "snapshot",
+            "snapshot_id": snapshot.get("id"),
+            "snapshot_name": snapshot.get("name"),
+            "created_at": snapshot.get("created_at"),
+        }
+    return runtime.policy_engine.policies, {"mode": "current", "snapshot_id": None}
+
+
+def _replay_compare_session(session: Dict[str, Any], candidate_policies: List[Dict[str, Any]], candidate_meta: Dict[str, Any]) -> Dict[str, Any]:
+    events = list(session.get("events") or [])
+    current_engine = runtime.policy_engine
+    candidate_engine = PolicyEngine(candidate_policies)
+    comparisons: List[Dict[str, Any]] = []
+
+    for idx, ev in enumerate(events):
+        stage = str(ev.get("stage") or "")
+        if stage not in {"prellm", "postllm", "tool_pre", "tool_post"}:
+            continue
+        if not isinstance(ev.get("decision"), dict):
+            continue
+        content = ev.get("content")
+        if stage in {"prellm", "postllm"} and not isinstance(content, str):
+            continue
+        if stage == "tool_pre":
+            tool_name = str(ev.get("tool") or "")
+            payload = ev.get("payload") or {}
+            subject = f"{tool_name}: {json.dumps(payload, ensure_ascii=True)}"
+        elif stage == "tool_post":
+            tool_name = str(ev.get("tool") or "")
+            result = ev.get("result") or ev.get("wrapped_result") or ev.get("safe_result") or {}
+            subject = f"{tool_name}: {json.dumps(result, ensure_ascii=True)}"
+        else:
+            subject = str(content or "")
+
+        context = {
+            "tenant_id": ev.get("tenant_id"),
+            "role": ev.get("role"),
+            "environment": ev.get("environment"),
+            "labels": list(ev.get("labels") or []),
+            "metadata": ev.get("metadata") or {},
+            "risk_state": {},
+        }
+        current_decision = current_engine.evaluate(subject, stage, runtime.detectors, dict(context))
+        candidate_decision = candidate_engine.evaluate(subject, stage, runtime.detectors, dict(context))
+        current_label = _evaluate_label_from_decision(current_decision)
+        candidate_label = _evaluate_label_from_decision(candidate_decision)
+        comparisons.append(
+            {
+                "request_id": str(ev.get("request_id") or f"legacy-{idx}"),
+                "stage": stage,
+                "current": current_decision.to_dict(),
+                "candidate": candidate_decision.to_dict(),
+                "current_outcome": current_label,
+                "candidate_outcome": candidate_label,
+                "changed": current_label != candidate_label,
+                "input_excerpt": subject[:220],
+            }
+        )
+
+    grouped: Dict[str, Dict[str, Any]] = {}
+    ordered: List[Dict[str, Any]] = []
+    for item in comparisons:
+        request_id = item["request_id"]
+        group = grouped.get(request_id)
+        if group is None:
+            group = {
+                "request_id": request_id,
+                "changes": [],
+                "changed": False,
+                "highest_current": "allow",
+                "highest_candidate": "allow",
+                "input_excerpt": item["input_excerpt"],
+            }
+            grouped[request_id] = group
+            ordered.append(group)
+        group["changes"].append(item)
+        group["changed"] = group["changed"] or bool(item["changed"])
+        severity = {"allow": 0, "warn": 1, "redact": 2, "approval": 3, "block": 4}
+        if severity[item["current_outcome"]] > severity[group["highest_current"]]:
+            group["highest_current"] = item["current_outcome"]
+        if severity[item["candidate_outcome"]] > severity[group["highest_candidate"]]:
+            group["highest_candidate"] = item["candidate_outcome"]
+
+    changed_requests = sum(1 for item in ordered if item["changed"])
+    return {
+        "candidate": candidate_meta,
+        "request_count": len(ordered),
+        "changed_requests": changed_requests,
+        "drift_rate": (float(changed_requests) / float(len(ordered))) if ordered else 0.0,
+        "requests": ordered,
+    }
 
 @router.post("/sessions", response_model=CreateSessionResponse, dependencies=[Depends(require_api_key)])
 def create_session():
@@ -464,7 +716,10 @@ def guard_tool_post(session_id: str, req: ToolGuardPostRequest):
 def get_session(session_id: str):
     if not store.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
-    return store.get_session(session_id)
+    session = dict(store.get_session(session_id) or {})
+    events = list(session.get("events") or [])
+    session["request_summaries"] = _collect_request_summaries(events)
+    return session
 
 @router.delete("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
 def delete_session(session_id: str):
@@ -623,6 +878,17 @@ def cost_risk_metrics():
 def get_policies():
     return {"policies": runtime.policy_engine.policies}
 
+
+@router.get("/policy-snapshots", dependencies=[Depends(require_api_key)])
+def get_policy_snapshots():
+    return {"snapshots": list_policy_snapshots()}
+
+
+@router.post("/policy-snapshots", dependencies=[Depends(require_api_key)])
+def create_snapshot(req: PolicySnapshotCreateRequest):
+    snapshot = create_policy_snapshot(req.name, req.policies or runtime.policy_engine.policies, source="dashboard")
+    return {"snapshot": snapshot}
+
 @router.put("/policies", dependencies=[Depends(require_api_key)])
 def update_policies(req: PolicyUpdateRequest):
     if settings.aegis_db_enabled:
@@ -634,6 +900,18 @@ def update_policies(req: PolicyUpdateRequest):
         save_policies(req.policies)
     runtime.reload_policies()
     return {"ok": True, "count": len(req.policies)}
+
+
+@router.post("/replay/session/{session_id}/compare-policy", dependencies=[Depends(require_api_key)])
+def replay_compare_policy(session_id: str, req: ReplayCompareRequest):
+    if not store.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = store.get_session(session_id)
+    candidate_policies, candidate_meta = _candidate_policies_from_request(req.snapshot_id, req.candidate_policies)
+    return {
+        "session_id": session_id,
+        **_replay_compare_session(session, candidate_policies, candidate_meta),
+    }
 
 @router.get("/tool-policies", dependencies=[Depends(require_api_key)])
 def get_tool_policies():

@@ -188,7 +188,7 @@ def compact_tool_result(tool_name: str, result: Dict[str, Any]) -> str:
                 lines.append(f"{idx}. {item.get('text') or item.get('url')}")
                 lines.append(f"   {item.get('url')}")
         return "\n".join(lines)
-    if tool_name in {"browser_navigate", "browser_click", "browser_type", "browser_snapshot", "browser_screenshot"}:
+    if tool_name in {"browser_navigate", "browser_click", "browser_type", "browser_snapshot", "browser_scroll", "browser_screenshot"}:
         title = str((result or {}).get("title") or "Browser page")
         url = str((result or {}).get("url") or "")
         preview = str((result or {}).get("text_preview") or "").strip()
@@ -214,8 +214,21 @@ def compact_tool_result(tool_name: str, result: Dict[str, Any]) -> str:
             for idx, item in enumerate(inputs[:6], start=1):
                 label = item.get("placeholder") or item.get("name") or item.get("type") or "input"
                 lines.append(f"{idx}. {label}")
+        headings = (result or {}).get("headings") or []
+        if headings:
+            lines.extend(["", "Headings:"])
+            for idx, item in enumerate(headings[:6], start=1):
+                lines.append(f"{idx}. {item.get('text') or '[unnamed heading]'}")
+        if result.get("auto_waited_for_transition"):
+            lines.extend(["", "Auto interaction: waited for the page to transition from its boot/loading state"])
+        if result.get("auto_scrolled"):
+            lines.extend(["", "Auto interaction: scrolled to inspect content below the first viewport"])
         if result.get("auto_interacted"):
             lines.extend(["", f"Auto interaction: clicked {result.get('auto_selector')}"])
+        if result.get("auto_reached_content"):
+            lines.extend(["", "Auto interaction: reached a fuller content view"])
+        if result.get("vision_summary"):
+            lines.extend(["", f"Visual fallback: {result.get('vision_summary')}"])
         return "\n".join(lines)
     return format_display_text(result)
 

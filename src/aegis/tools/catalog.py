@@ -48,6 +48,12 @@ def tool_catalog() -> List[Dict[str, Any]]:
             "use_when": "The agent needs the latest page text and links after interactive navigation.",
         },
         {
+            "name": "browser_scroll",
+            "description": "Scroll the current browser page and capture the updated state.",
+            "payload_schema": {"pixels": "integer?"},
+            "use_when": "The agent needs to move past the first viewport to reach the next visible section.",
+        },
+        {
             "name": "browser_screenshot",
             "description": "Capture a screenshot of the current browser page.",
             "payload_schema": {},

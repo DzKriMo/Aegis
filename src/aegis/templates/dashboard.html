@@ -201,8 +201,10 @@
                   <option value="">All outcomes</option>
                   <option value="allow">Allow</option>
                   <option value="warn">Warn</option>
+                  <option value="redact">Redact</option>
                   <option value="approval">Approval</option>
                   <option value="block">Block</option>
+                  <option value="runtime_error">Runtime Error</option>
                 </select>
                 <input id="requestSearch" class="input" placeholder="Search requests..." oninput="renderRequests()" />
               </div>
@@ -219,6 +221,10 @@
                 </div>
               </div>
               <p class="meta-text" id="traceInfo">Select a request to inspect stage-by-stage decisions.</p>
+              <div id="inspector" class="subsection" style="margin-top: 14px;">
+                <div class="subsection-title">Decision Inspector</div>
+                <p class="meta-text" id="inspectorSummary">Select a request to inspect the normalized Aegis decision.</p>
+              </div>
               <div id="trace" class="scroll-container" style="margin-top: 14px;"></div>
             </section>
           </div>
@@ -234,14 +240,18 @@
               <div class="pills-row">
                 <span class="pill pill-allow" id="countAllow">allow: 0</span>
                 <span class="pill pill-warn" id="countWarn">warn: 0</span>
+                <span class="pill" id="countRedact">redact: 0</span>
                 <span class="pill pill-approval" id="countApproval">approval: 0</span>
                 <span class="pill pill-block" id="countBlock">block: 0</span>
+                <span class="pill" id="countRuntime">runtime: 0</span>
               </div>
               <div class="progress-bar">
                 <div class="progress-segment allow" id="barAllow" style="width: 0%"></div>
                 <div class="progress-segment warn" id="barWarn" style="width: 0%"></div>
+                <div class="progress-segment approval" id="barRedact" style="width: 0%"></div>
                 <div class="progress-segment approval" id="barApproval" style="width: 0%"></div>
                 <div class="progress-segment block" id="barBlock" style="width: 0%"></div>
+                <div class="progress-segment block" id="barRuntime" style="width: 0%"></div>
               </div>
               <div class="subsection">
                 <div class="subsection-title">Risk Trend</div>
@@ -270,11 +280,12 @@
               <div class="tab-panel active" data-panel="runtime">
                 <div class="form-grid">
                   <div class="form-field">
-                    <label>Aegis Guardrails</label>
+                    <label>Bypass Aegis Policy Checks</label>
                     <label class="toggle-row">
                       <input id="guardrailsEnabled" type="checkbox" checked />
-                      <span>Enabled</span>
+                      <span>Policy checks enabled</span>
                     </label>
+                    <p class="meta-text">Turns Aegis policy enforcement on or off. Tool validation and runtime errors still apply.</p>
                   </div>
                   <div class="form-field">
                     <label>Ollama Model</label>
@@ -378,10 +389,25 @@
                   <label>Candidate Policies (Optional)</label>
                   <textarea id="candidatePolicies" class="textarea compact" placeholder='["policy1", "policy2"]'></textarea>
                 </div>
+                <div class="form-grid" style="margin-top: 12px;">
+                  <div class="form-field">
+                    <label>Saved Snapshot</label>
+                    <select id="snapshotSelect" class="select">
+                      <option value="">Current policies</option>
+                    </select>
+                  </div>
+                  <div class="form-field">
+                    <label>Snapshot Name</label>
+                    <input id="snapshotName" class="input" placeholder="e.g. pre-redaction-tuning" />
+                  </div>
+                </div>
                 <div class="flex gap-sm" style="margin-top: 14px;">
                   <button class="btn primary" onclick="runPolicySimulation()" style="flex: 1;">Policy Diff</button>
+                  <button class="btn" onclick="savePolicySnapshot()">Save Snapshot</button>
+                  <button class="btn" onclick="runPolicyReplayCompare()">Replay Compare</button>
                   <button class="btn" onclick="runRedTeam()">Red Team</button>
                 </div>
+                <pre id="snapshotResponse" class="terminal small" style="margin-top: 12px;">No snapshots yet.</pre>
                 <pre id="simulateResponse" class="terminal small" style="margin-top: 12px;">No simulation yet.</pre>
                 <pre id="redTeamResponse" class="terminal small" style="margin-top: 12px;">No red-team runs yet.</pre>
               </div>

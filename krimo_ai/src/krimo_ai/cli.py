@@ -13,8 +13,18 @@ from .memory import AgentMemory
 from .modeling import force_plain_answer, model_chat
 from .rendering import format_display_text
 from .runtime import attach_runtime, build_memory_context, create_runtime, execute_agent_tool_action, guard_output_with_approvals, maybe_sensitive_input_notice, normalize_action_payload, run_autocode_task
+from .vision import OCR_AVAILABLE, PIL_AVAILABLE
 
 from aegis.tools.client import AegisClient
+from aegis.services.browser_session import browser_available
+
+
+def _capability_status() -> str:
+    browser_ok, browser_err = browser_available()
+    browser_label = "browser=ready" if browser_ok else f"browser=missing ({browser_err or 'unavailable'})"
+    ocr_label = "ocr=ready" if PIL_AVAILABLE and OCR_AVAILABLE else "ocr=missing"
+    vision_label = "vision=ready" if PIL_AVAILABLE else "vision=missing"
+    return f"[capabilities] {browser_label} • {vision_label} • {ocr_label}"
 
 
 def print_banner(session_id: str) -> None:
@@ -22,6 +32,7 @@ def print_banner(session_id: str) -> None:
     print(f"{AGENT_NAME} is ready (Ultimate Edition)")
     print(f"[aegis] session={session_id}")
     print("[status] Enhanced: git, docker, database, interpreter, vision, autonomous, documents")
+    print(_capability_status())
 
 
 def execute_tool_command(command: str, args: str) -> str:

@@ -68,6 +68,9 @@ class GuardedTools:
     def browser_snapshot(self) -> Dict[str, Any]:
         return self.adapter.run_tool("browser_snapshot", {})
 
+    def browser_scroll(self, pixels: int = 900) -> Dict[str, Any]:
+        return self.adapter.run_tool("browser_scroll", {"pixels": pixels})
+
     def browser_screenshot(self) -> Dict[str, Any]:
         return self.adapter.run_tool("browser_screenshot", {})
 

@@ -22,6 +22,7 @@ from ..services.browser_session import (
     browser_click,
     browser_type,
     browser_snapshot,
+    browser_scroll,
     browser_screenshot,
 )
 
@@ -580,7 +581,7 @@ def execute_tool(
         except Exception as exc:
             return ToolResult(False, f"Web open failed: {exc}", None)
 
-    if tool_name in {"browser_navigate", "browser_click", "browser_type", "browser_snapshot", "browser_screenshot"}:
+    if tool_name in {"browser_navigate", "browser_click", "browser_type", "browser_snapshot", "browser_scroll", "browser_screenshot"}:
         ok, err = browser_available()
         if not ok:
             return ToolResult(False, f"Browser automation unavailable: {err}", None)
@@ -626,6 +627,13 @@ def execute_tool(
                 return ToolResult(True, "Browser snapshot captured", browser_snapshot(session_id, wait_ms=wait_ms))
             except Exception as exc:
                 return ToolResult(False, f"Browser snapshot failed: {exc}", None)
+
+        if tool_name == "browser_scroll":
+            pixels = int(payload.get("pixels", 900) or 900)
+            try:
+                return ToolResult(True, "Browser scrolled", browser_scroll(session_id, pixels=pixels))
+            except Exception as exc:
+                return ToolResult(False, f"Browser scroll failed: {exc}", None)
 
         if tool_name == "browser_screenshot":
             try:
