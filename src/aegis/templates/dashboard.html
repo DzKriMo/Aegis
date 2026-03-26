@@ -404,11 +404,13 @@
                 <div class="flex gap-sm" style="margin-top: 14px;">
                   <button class="btn primary" onclick="runPolicySimulation()" style="flex: 1;">Policy Diff</button>
                   <button class="btn" onclick="savePolicySnapshot()">Save Snapshot</button>
+                  <button class="btn" onclick="applySelectedSnapshot()">Apply Snapshot</button>
                   <button class="btn" onclick="runPolicyReplayCompare()">Replay Compare</button>
                   <button class="btn" onclick="runRedTeam()">Red Team</button>
                 </div>
                 <pre id="snapshotResponse" class="terminal small" style="margin-top: 12px;">No snapshots yet.</pre>
                 <pre id="simulateResponse" class="terminal small" style="margin-top: 12px;">No simulation yet.</pre>
+                <div id="policyCompareView" class="scroll-container" style="margin-top: 12px;"></div>
                 <pre id="redTeamResponse" class="terminal small" style="margin-top: 12px;">No red-team runs yet.</pre>
               </div>
             </section>

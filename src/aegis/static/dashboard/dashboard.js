@@ -544,10 +544,71 @@ async function savePolicySnapshot() {
   await loadPolicySnapshots();
 }
 
+async function applySelectedSnapshot() {
+  const out = document.getElementById('snapshotResponse');
+  const snapshotId = (document.getElementById('snapshotSelect').value || '').trim();
+  if (!snapshotId) {
+    out.textContent = 'Select a saved snapshot first.';
+    return;
+  }
+  const res = await api(`/policy-snapshots/${snapshotId}/apply`, { method: 'POST' });
+  out.textContent = JSON.stringify(res, null, 2);
+  await refreshAll();
+}
+
+function renderPolicyReplayCompare(data) {
+  const container = document.getElementById('policyCompareView');
+  if (!container) return;
+  if (!data || !Array.isArray(data.requests)) {
+    container.innerHTML = '';
+    return;
+  }
+  const candidate = data.candidate || {};
+  const header = `
+    <div class="request-item">
+      <div class="request-item-header">
+        <span class="request-item-flow">Replay Compare</span>
+        ${badge(data.changed_requests ? 'approval' : 'allow')}
+      </div>
+      <div class="request-item-content">
+        Candidate: ${candidate.snapshot_name || candidate.mode || 'current'}<br/>
+        Changed requests: ${data.changed_requests}/${data.request_count}<br/>
+        Drift rate: ${Number(data.drift_rate || 0).toFixed(2)}
+      </div>
+    </div>
+  `;
+  const rows = data.requests.map((item) => {
+    const currentOutcome = item.highest_current || 'allow';
+    const candidateOutcome = item.highest_candidate || 'allow';
+    const changeBadge = item.changed ? badge(candidateOutcome) : badge('allow');
+    const stageLines = (item.changes || []).slice(0, 6).map((change) => {
+      const changed = change.changed ? 'changed' : 'same';
+      return `<div class="text-muted text-sm">${change.stage}: ${change.current_outcome} → ${change.candidate_outcome} (${changed})</div>`;
+    }).join('');
+    return `
+      <div class="request-item">
+        <div class="request-item-header">
+          <span class="request-item-flow">${item.request_id.slice(0, 8)}...</span>
+          <span class="flex items-center gap-sm">
+            ${badge(currentOutcome)}
+            <span class="text-muted text-sm">→</span>
+            ${changeBadge}
+          </span>
+        </div>
+        <div class="request-item-content">${item.input_excerpt || '[no content]'}</div>
+        ${stageLines}
+      </div>
+    `;
+  }).join('');
+  container.innerHTML = header + rows;
+}
+
 async function runPolicyReplayCompare() {
   const out = document.getElementById('simulateResponse');
+  const compareView = document.getElementById('policyCompareView');
   if (!currentSession) {
     out.textContent = 'Select a session first.';
+    if (compareView) compareView.innerHTML = '';
     return;
   }
   let candidate = null;
@@ -563,6 +624,7 @@ async function runPolicyReplayCompare() {
     }),
   });
   out.textContent = JSON.stringify(res, null, 2);
+  renderPolicyReplayCompare(res);
 }
 
 async function runRedTeam() {
@@ -907,6 +969,7 @@ window.approvePending = approvePending;
 window.runPolicySimulation = runPolicySimulation;
 window.runPolicyReplayCompare = runPolicyReplayCompare;
 window.savePolicySnapshot = savePolicySnapshot;
+window.applySelectedSnapshot = applySelectedSnapshot;
 window.runRedTeam = runRedTeam;
 window.updateTenantPackMeta = updateTenantPackMeta;
 window.saveKey = saveKey;

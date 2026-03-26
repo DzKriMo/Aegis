@@ -1,0 +1,288 @@
+{
+  "id": "9ea26e51-8cc1-49b7-a5db-6452a93d7625",
+  "name": "apply-test",
+  "created_at": 1774484772,
+  "source": "manual",
+  "policies": [
+    {
+      "id": "block_ml_block_intent",
+      "stage": "prellm",
+      "action": "block",
+      "match": {
+        "any": [
+          {
+            "detector": "ml_block_intent"
+          }
+        ]
+      },
+      "risk": 0.9
+    },
+    {
+      "id": "warn_ml_warn_intent",
+      "stage": "prellm",
+      "action": "warn",
+      "match": {
+        "any": [
+          {
+            "detector": "ml_warn_intent"
+          }
+        ]
+      },
+      "risk": 0.45
+    },
+    {
+      "id": "block_goal_hijack",
+      "stage": "prellm",
+      "action": "block",
+      "match": {
+        "any": [
+          {
+            "detector": "goal_hijack"
+          },
+          {
+            "detector": "jailbreak"
+          },
+          {
+            "semantic": {
+              "category": "goal_hijack",
+              "threshold": 0.62
+            }
+          }
+        ]
+      },
+      "risk": 0.9
+    },
+    {
+      "id": "block_internal_prompt_extraction",
+      "stage": "prellm",
+      "action": "block",
+      "match": {
+        "any": [
+          {
+            "detector": "internal_prompt_extraction"
+          },
+          {
+            "detector": "exfiltration"
+          },
+          {
+            "regex": "(initial alignment preamble|policy scaffolding|instruction hierarchy|reasoning trace|hidden (system )?instructions?|system prompt|environment variables?|env vars?)"
+          }
+        ]
+      },
+      "risk": 0.95
+    },
+    {
+      "id": "block_high_risk_abuse",
+      "stage": "prellm",
+      "action": "block",
+      "match": {
+        "any": [
+          {
+            "detector": "high_risk_abuse"
+          },
+          {
+            "semantic": {
+              "category": "high_risk_abuse",
+              "threshold": 0.58
+            }
+          }
+        ]
+      },
+      "risk": 0.95
+    },
+    {
+      "id": "warn_prompt_injection_context",
+      "stage": "prellm",
+      "action": "warn",
+      "match": {
+        "any": [
+          {
+            "detector": "prompt_injection"
+          }
+        ]
+      },
+      "risk": 0.4
+    },
+    {
+      "id": "warn_suspicious_disclosure",
+      "stage": "prellm",
+      "action": "warn",
+      "match": {
+        "any": [
+          {
+            "detector": "suspicious_disclosure"
+          },
+          {
+            "semantic": {
+              "category": "suspicious_disclosure",
+              "threshold": 0.6
+            }
+          }
+        ]
+      },
+      "risk": 0.45
+    },
+    {
+      "id": "warn_caution_disclosure",
+      "stage": "prellm",
+      "action": "warn",
+      "match": {
+        "any": [
+          {
+            "detector": "caution_disclosure"
+          }
+        ]
+      },
+      "risk": 0.4
+    },
+    {
+      "id": "warn_exfiltration_prellm",
+      "stage": "prellm",
+      "action": "warn",
+      "match": {
+        "any": [
+          {
+            "detector": "exfiltration"
+          }
+        ]
+      },
+      "risk": 0.5
+    },
+    {
+      "id": "redact_pii_prellm",
+      "stage": "prellm",
+      "action": "redact",
+      "match": {
+        "any": [
+          {
+            "detector": "pii"
+          }
+        ]
+      },
+      "risk": 0.35
+    },
+    {
+      "id": "redact_pii",
+      "stage": "postllm",
+      "action": "block",
+      "match": {
+        "any": [
+          {
+            "detector": "pii"
+          }
+        ]
+      },
+      "risk": 0.9
+    },
+    {
+      "id": "redact_pii_tool_pre",
+      "stage": "tool_pre",
+      "action": "redact",
+      "match": {
+        "any": [
+          {
+            "detector": "pii"
+          }
+        ]
+      },
+      "risk": 0.4
+    },
+    {
+      "id": "redact_pii_tool_post",
+      "stage": "tool_post",
+      "action": "redact",
+      "match": {
+        "any": [
+          {
+            "detector": "pii"
+          }
+        ]
+      },
+      "risk": 0.4
+    },
+    {
+      "id": "block_secrets",
+      "stage": "postllm",
+      "action": "block",
+      "match": {
+        "any": [
+          {
+            "detector": "secrets"
+          },
+          {
+            "detector": "exfiltration"
+          }
+        ]
+      },
+      "risk": 0.9
+    },
+    {
+      "id": "warn_policy_violation",
+      "stage": "prellm",
+      "action": "warn",
+      "match": {
+        "any": [
+          {
+            "detector": "policy_violation"
+          }
+        ]
+      },
+      "risk": 0.5
+    },
+    {
+      "id": "approval_for_confidential",
+      "stage": "postllm",
+      "action": "approve",
+      "match": {
+        "any": [
+          {
+            "label": "CONFIDENTIAL"
+          }
+        ]
+      },
+      "risk": 0.8
+    },
+    {
+      "id": "block_tool_shell_prod",
+      "stage": "tool_pre",
+      "action": "block",
+      "match": {
+        "any": [
+          {
+            "regex": "shell"
+          },
+          {
+            "environment": "prod"
+          }
+        ]
+      },
+      "risk": 0.9
+    },
+    {
+      "id": "block_tool_secret_result",
+      "stage": "tool_post",
+      "action": "block",
+      "match": {
+        "any": [
+          {
+            "detector": "secrets"
+          }
+        ]
+      },
+      "risk": 0.9
+    },
+    {
+      "id": "approve_shell_tool",
+      "stage": "tool_pre",
+      "action": "approve",
+      "match": {
+        "any": [
+          {
+            "regex": "shell"
+          }
+        ]
+      },
+      "risk": 0.6
+    }
+  ]
+}

@@ -889,6 +889,31 @@ def create_snapshot(req: PolicySnapshotCreateRequest):
     snapshot = create_policy_snapshot(req.name, req.policies or runtime.policy_engine.policies, source="dashboard")
     return {"snapshot": snapshot}
 
+
+@router.post("/policy-snapshots/{snapshot_id}/apply", dependencies=[Depends(require_api_key)])
+def apply_policy_snapshot(snapshot_id: str):
+    snapshot = load_policy_snapshot(snapshot_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Policy snapshot not found")
+    policies = list(snapshot.get("policies") or [])
+    if settings.aegis_db_enabled:
+        try:
+            save_policies_to_db(policies)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"DB save failed: {exc}")
+    else:
+        save_policies(policies)
+    runtime.reload_policies()
+    return {
+        "ok": True,
+        "applied_snapshot": {
+            "id": snapshot.get("id"),
+            "name": snapshot.get("name"),
+            "created_at": snapshot.get("created_at"),
+            "policy_count": len(policies),
+        },
+    }
+
 @router.put("/policies", dependencies=[Depends(require_api_key)])
 def update_policies(req: PolicyUpdateRequest):
     if settings.aegis_db_enabled:

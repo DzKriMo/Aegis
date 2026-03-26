@@ -5,7 +5,6 @@ import math
 import re
 from pathlib import Path
 from typing import Dict, Any
-import numpy as np
 
 from ..config import settings
 from .llm_client import classify_text
@@ -111,6 +110,10 @@ def _lr_predict(model: Dict[str, Any], text: str) -> Dict[str, float]:
 
 
 def _stack_predict(model: Dict[str, Any], text: str) -> Dict[str, float]:
+    try:
+        import numpy as np  # type: ignore
+    except Exception as exc:
+        raise RuntimeError(f"numpy_unavailable:{exc}")
     lr = model.get("lr_pipeline")
     lgbm = model.get("lgbm_model")
     classes = [str(c) for c in model.get("classes", ["ALLOW", "WARN", "BLOCK"])]
